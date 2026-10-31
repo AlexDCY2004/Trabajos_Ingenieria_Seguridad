@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Shield, Mail, Lock, AlertTriangle, Smartphone, KeyRound } from 'lucide-react';
 import { authService, mensajeError } from '../services/api';
 import { useSesion } from '../sesion';
@@ -17,6 +17,7 @@ const inputClase = 'flex-1 w-full px-4 py-2 border border-gray-300 rounded-lg fo
 export default function Login() {
   const { iniciar } = useSesion();
   const location = useLocation();
+  const navigate = useNavigate();
   const desde = (location.state as { desde?: string } | null)?.desde;
 
   const [email, setEmail] = useState('');
@@ -41,6 +42,10 @@ export default function Login() {
         entrar(res.data);
       }
     } catch (err: any) {
+      if (err.response?.data?.verificar_correo) {
+        navigate('/verificar-correo', { state: { email, aviso: err.response.data.error } });
+        return;
+      }
       setError(mensajeError(err, 'Credenciales inválidas'));
     } finally {
       setLoading(false);

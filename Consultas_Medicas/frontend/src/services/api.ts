@@ -79,6 +79,14 @@ export const authService = {
   registro: (data: unknown) => api.post('/auth/registro', data),
   logout: () => api.post('/auth/logout'),
   perfil: () => api.get('/auth/perfil'),
+  verificarCorreo: (email: string, codigo: string) => api.post('/auth/verificar-correo', { email, codigo }),
+  reenviarCodigo: (email: string) => api.post('/auth/reenviar-codigo', { email }),
+  // Código por correo antes de una acción sensible (S10)
+  solicitarCodigo: (accion: 'dependiente' | 'poliza' | 'baja') => api.post('/auth/codigo', { accion }),
+  preferencias: (mostrar_especialidad_recordatorio: boolean) =>
+    api.post('/auth/preferencias', { mostrar_especialidad_recordatorio }),
+  misDatos: () => api.get('/auth/mis-datos'),
+  baja: (codigo: string) => api.post('/auth/baja', { codigo }),
   consentimientos: () => api.get('/auth/consentimientos'),
   actualizarConsentimiento: (aceptado: boolean) => api.post('/auth/consentimientos', { tipo: 'publicidad', aceptado }),
 };
@@ -86,7 +94,9 @@ export const authService = {
 export const agendaService = {
   catalogo: (params?: Record<string, string>) => api.get('/agenda/catalogo', { params }),
   horarios: (profesionalId: string) => api.get(`/agenda/profesionales/${profesionalId}/horarios`),
-  reservar: (data: { profesional_id: string; fecha_hora: string }) => api.post('/agenda/reservar', data),
+  reservar: (data: { profesional_id: string; fecha_hora: string; dependiente_id?: string }) =>
+    api.post('/agenda/reservar', data),
+  reprogramar: (id: string, fecha_hora: string) => api.post(`/agenda/cita/${id}/reprogramar`, { fecha_hora }),
   confirmar: (id: string) => api.post(`/agenda/cita/${id}/confirmar`),
   misCitas: () => api.get('/agenda/mis-citas'),
   cancelar: (id: string) => api.delete(`/agenda/cita/${id}`),
@@ -108,12 +118,37 @@ export const pagosService = {
   // Solo en desarrollo: hace de pasarela de pagos (el backend no expone esta ruta en producción)
   simular: (referencia: string, resultado: 'aprobado' | 'rechazado') =>
     api.post('/pagos/simulador', { referencia, resultado }),
+  conciliacion: (desde: string, hasta: string) => api.get('/pagos/conciliacion', { params: { desde, hasta } }),
+};
+
+export const dependientesService = {
+  listar: () => api.get('/dependientes'),
+  registrar: (data: unknown) => api.post('/dependientes', data),
+  pendientes: () => api.get('/dependientes/pendientes'),
+  documento: (id: string) => api.get(`/dependientes/${id}/documento`),
+  verificar: (id: string, data: { decision: 'aprobar'; identificacion: string } | { decision: 'rechazar'; motivo: string }) =>
+    api.post(`/dependientes/${id}/verificar`, data),
+};
+
+export const adminService = {
+  sedes: () => api.get('/admin/sedes'),
+  crearSede: (data: { nombre: string; direccion: string }) => api.post('/admin/sedes', data),
+  editarSede: (id: string, data: Record<string, unknown>) => api.patch(`/admin/sedes/${id}`, data),
+  profesionales: () => api.get('/admin/profesionales'),
+  crearProfesional: (data: Record<string, string>) => api.post('/admin/profesionales', data),
+  editarProfesional: (id: string, data: Record<string, unknown>) => api.patch(`/admin/profesionales/${id}`, data),
 };
 
 export const auditoriaService = {
   eventos: (params?: Record<string, string | number>) => api.get('/auditoria/eventos', { params }),
   verificarCadena: () => api.get('/auditoria/verificar-cadena'),
+  plazosConservacion: () => api.get('/auditoria/conservacion'),
+  aplicarConservacion: () => api.post('/auditoria/conservacion'),
 };
 
-export const mensajeError = (err: any, porDefecto: string): string =>
-  err?.response?.data?.error || porDefecto;
+// Primer mensaje de validación de un campo, o el error general
+export const mensajeError = (err: any, porDefecto: string): string => {
+  const campos = err?.response?.data?.detalles?.fieldErrors as Record<string, string[]> | undefined;
+  const primero = campos ? Object.values(campos).flat()[0] : undefined;
+  return primero || err?.response?.data?.error || porDefecto;
+};

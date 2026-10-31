@@ -134,7 +134,7 @@ export default function Registro() {
         acepta_privacidad: true,
         acepta_publicidad: aceptaPublicidad,
       });
-      navigate('/login');
+      navigate('/verificar-correo', { state: { email: form.email.trim().toLowerCase() } });
     } catch (err: any) {
       const data = err.response?.data;
       const fieldErrors: Record<string, string[]> = data?.detalles?.fieldErrors ?? {};

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { Calendar, Clock, AlertCircle, CheckCircle, ArrowLeft, MapPin, Stethoscope, ShieldCheck, LogIn } from 'lucide-react';
-import { agendaService, coberturaService, mensajeError } from '../services/api';
+import { agendaService, coberturaService, dependientesService, mensajeError } from '../services/api';
 import { formatoDia, formatoHora, formatoFechaHora, claveDia, formatoDinero } from '../utils/fechas';
 import { useSesion } from '../sesion';
 import PanelPago from '../components/PanelPago';
@@ -55,6 +55,16 @@ export default function Reserva() {
   const [enCurso, setEnCurso] = useState<EnCurso | null>(null);
   const [segundosRestantes, setSegundosRestantes] = useState(0);
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
+  // La cita puede ser para el paciente o para un dependiente con la representación verificada (S06)
+  const [dependientes, setDependientes] = useState<{ id: string; nombres: string; apellidos: string }[]>([]);
+  const [paraQuien, setParaQuien] = useState('');
+
+  useEffect(() => {
+    if (!esPaciente) return;
+    dependientesService.listar()
+      .then((r) => setDependientes(r.data.filter((d: { estado_verificacion: string }) => d.estado_verificacion === 'verificado')))
+      .catch(() => {});
+  }, [esPaciente]);
 
   // Los horarios y su disponibilidad vienen siempre del servidor (públicos, sin datos de pacientes)
   const cargarHorarios = useCallback(async () => {
@@ -108,7 +118,9 @@ export default function Reserva() {
     setEnviando(true);
     setMensaje({ texto: '', tipo: '' });
     try {
-      const res = await agendaService.reservar({ profesional_id: profesionalId, fecha_hora: h.fecha_hora });
+      const res = await agendaService.reservar({
+        profesional_id: profesionalId, fecha_hora: h.fecha_hora, dependiente_id: paraQuien || undefined,
+      });
       const cita: EnCurso = { ...res.data, fecha_hora: h.fecha_hora, estado: 'retenida' };
       setEnCurso(cita);
       // Paso 4 del recorrido (sección 3.2): verificar la cobertura con la aseguradora del paciente
@@ -264,6 +276,16 @@ export default function Reserva() {
                 o <Link to="/registro" className="text-blue-600 underline">cree una cuenta</Link>.
               </span>
             </p>
+          )}
+          {esPaciente && dependientes.length > 0 && (
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              ¿Para quién es la cita?
+              <select value={paraQuien} onChange={(e) => setParaQuien(e.target.value)}
+                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm">
+                <option value="">Para mí</option>
+                {dependientes.map((d) => <option key={d.id} value={d.id}>{d.nombres} {d.apellidos}</option>)}
+              </select>
+            </label>
           )}
           {usuario && !esPaciente && (
             <p className="text-sm text-gray-600">Solo los pacientes reservan citas en línea.</p>

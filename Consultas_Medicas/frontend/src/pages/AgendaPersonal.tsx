@@ -4,6 +4,7 @@ import { agendaService, mensajeError } from '../services/api';
 import { formatoFechaHora, formatoDinero } from '../utils/fechas';
 import { useSesion } from '../sesion';
 import { ESTADOS_CITA, ESTADOS_PAGO } from './MisCitas';
+import SelectorHorario from '../components/SelectorHorario';
 
 interface CitaAgenda {
   id: string;
@@ -12,6 +13,8 @@ interface CitaAgenda {
   estado: string;
   paciente: string | null;
   // Solo recepción
+  profesional_id?: string;
+  representante?: string | null;
   especialidad?: string;
   profesional?: string;
   estado_pago?: string | null;
@@ -26,6 +29,7 @@ export default function AgendaPersonal() {
   const [citas, setCitas] = useState<CitaAgenda[]>([]);
   const [cargando, setCargando] = useState(true);
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
+  const [reprogramando, setReprogramando] = useState<CitaAgenda | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -75,6 +79,15 @@ export default function AgendaPersonal() {
         </div>
       )}
 
+      {reprogramando && reprogramando.profesional_id && (
+        <div className="bg-white p-4 rounded-xl border border-gray-200 space-y-2">
+          <p className="text-sm">Reprogramar la cita {reprogramando.codigo_cita} de {reprogramando.paciente}</p>
+          <SelectorHorario profesionalId={reprogramando.profesional_id} actual={reprogramando.fecha_hora}
+            onCancelar={() => setReprogramando(null)}
+            onElegir={(f) => { setReprogramando(null); accion(() => agendaService.reprogramar(reprogramando.id, f)); }} />
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
         {cargando ? (
           <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>
@@ -98,7 +111,11 @@ export default function AgendaPersonal() {
                 return (
                   <tr key={c.id}>
                     <td className="px-4 py-3 whitespace-nowrap capitalize">{formatoFechaHora(c.fecha_hora)}</td>
-                    <td className="px-4 py-3">{c.paciente ?? '—'}<div className="text-xs text-gray-400">{c.codigo_cita}</div></td>
+                    <td className="px-4 py-3">
+                      {c.paciente ?? '—'}
+                      {c.representante && <div className="text-xs text-gray-500">Representante: {c.representante}</div>}
+                      <div className="text-xs text-gray-400">{c.codigo_cita}</div>
+                    </td>
                     {esRecepcion && <td className="px-4 py-3">{c.profesional}<div className="text-xs text-gray-400">{c.especialidad}</div></td>}
                     <td className="px-4 py-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${estado.clase}`}>{estado.texto}</span>
@@ -112,7 +129,12 @@ export default function AgendaPersonal() {
                     <td className="px-4 py-3 whitespace-nowrap text-right">
                       {esRecepcion && ['retenida', 'pendiente_pago', 'confirmada'].includes(c.estado)
                         && new Date(c.fecha_hora).getTime() > Date.now() && (
-                        <button onClick={() => cancelar(c)} className="text-sm text-red-600 hover:underline">Cancelar</button>
+                        <span className="flex gap-3 justify-end">
+                          {c.estado === 'confirmada' && (
+                            <button onClick={() => setReprogramando(c)} className="text-sm text-blue-600 hover:underline">Reprogramar</button>
+                          )}
+                          <button onClick={() => cancelar(c)} className="text-sm text-red-600 hover:underline">Cancelar</button>
+                        </span>
                       )}
                       {!esRecepcion && habilitadaAtencion(c) && (
                         <span className="flex gap-2 justify-end">

@@ -4,6 +4,7 @@ import { CalendarDays, MapPin, AlertCircle, CheckCircle } from 'lucide-react';
 import { agendaService, mensajeError } from '../services/api';
 import { formatoFechaHora, formatoDinero } from '../utils/fechas';
 import PanelPago from '../components/PanelPago';
+import SelectorHorario from '../components/SelectorHorario';
 
 interface Cita {
   id: string;
@@ -14,6 +15,9 @@ interface Cita {
   estado_pago: string | null;
   monto_copago: string | null;
   cubierta: boolean | null;
+  profesional_id: string;
+  veces_reprogramada: number;
+  dependiente: string | null;
   medico_nombres: string;
   medico_apellidos: string;
   sede: string;
@@ -41,6 +45,8 @@ export default function MisCitas() {
   const [citas, setCitas] = useState<Cita[]>([]);
   const [cargando, setCargando] = useState(true);
   const [pagando, setPagando] = useState<string | null>(null);
+  const [reprogramando, setReprogramando] = useState<string | null>(null);
+  const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
 
   const cargar = useCallback(async () => {
@@ -66,9 +72,24 @@ export default function MisCitas() {
     cargar();
   };
 
+  const reprogramar = async (c: Cita, fechaHora: string) => {
+    setEnviando(true);
+    try {
+      await agendaService.reprogramar(c.id, fechaHora);
+      setMensaje({ texto: `Cita reprogramada para el ${formatoFechaHora(fechaHora)}`, tipo: 'exito' });
+      setReprogramando(null);
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo reprogramar la cita'), tipo: 'error' });
+    } finally {
+      setEnviando(false);
+    }
+    cargar();
+  };
+
   const futura = (c: Cita) => new Date(c.fecha_hora).getTime() > Date.now();
   const puedePagar = (c: Cita) => ['pendiente_pago', 'confirmada'].includes(c.estado)
     && ['pendiente', 'rechazado'].includes(c.estado_pago ?? '') && Number(c.monto_copago) > 0 && futura(c);
+  const puedeReprogramar = (c: Cita) => c.estado === 'confirmada' && futura(c) && c.veces_reprogramada < 2;
   const puedeCancelar = (c: Cita) => ['retenida', 'pendiente_pago', 'confirmada'].includes(c.estado) && futura(c);
 
   return (
@@ -105,6 +126,7 @@ export default function MisCitas() {
                     <p className="text-xs text-gray-500 flex items-center gap-1">
                       <MapPin className="h-3.5 w-3.5" /> {c.sede} · {c.sede_direccion}
                     </p>
+                    {c.dependiente && <p className="text-xs text-blue-700">Para: {c.dependiente}</p>}
                     <p className="text-xs text-gray-500">Código {c.codigo_cita}</p>
                   </div>
                   <div className="text-right space-y-1">
@@ -118,7 +140,10 @@ export default function MisCitas() {
                   </div>
                 </div>
 
-                {pagando === c.id ? (
+                {reprogramando === c.id ? (
+                  <SelectorHorario profesionalId={c.profesional_id} actual={c.fecha_hora} enviando={enviando}
+                    onElegir={(f) => reprogramar(c, f)} onCancelar={() => setReprogramando(null)} />
+                ) : pagando === c.id ? (
                   <PanelPago citaId={c.id} monto={c.monto_copago ?? 0}
                     onResultado={(ok, texto) => {
                       setPagando(null);
@@ -131,6 +156,12 @@ export default function MisCitas() {
                       <button onClick={() => setPagando(c.id)}
                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">
                         Pagar copago
+                      </button>
+                    )}
+                    {puedeReprogramar(c) && (
+                      <button onClick={() => setReprogramando(c.id)}
+                        className="px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm rounded-lg">
+                        Reprogramar
                       </button>
                     )}
                     {puedeCancelar(c) && (
@@ -147,7 +178,8 @@ export default function MisCitas() {
         </div>
       )}
       <p className="text-xs text-gray-500">
-        Las citas confirmadas se cancelan en línea hasta 24 horas antes, con reembolso total del copago. Después, comuníquese con recepción.
+        Las citas confirmadas se cancelan o reprograman en línea hasta 24 horas antes (máximo 2 reprogramaciones), con
+        reembolso total del copago al cancelar. Después, comuníquese con recepción.
       </p>
     </div>
   );

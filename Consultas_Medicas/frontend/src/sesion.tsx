@@ -20,7 +20,8 @@ export const INICIO_POR_ROL: Record<string, string> = {
   aseguradora: '/afiliados',
   oficial_seguridad: '/auditoria',
   dpd: '/auditoria',
-  admin: '/catalogo',
+  admin: '/admin/catalogo',
+  contabilidad: '/conciliacion',
 };
 
 export const inicioDe = (usuario: UsuarioSesion | null) =>

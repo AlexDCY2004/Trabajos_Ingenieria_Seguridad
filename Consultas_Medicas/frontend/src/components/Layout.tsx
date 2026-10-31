@@ -1,15 +1,24 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { Shield, LogOut, LogIn, User, CalendarDays, ShieldAlert, Building, ClipboardList, Users } from 'lucide-react';
+import {
+  Shield, LogOut, LogIn, User, CalendarDays, ShieldAlert, Building, ClipboardList, Users, UserPlus, FileCheck,
+  Calculator, Settings, Archive,
+} from 'lucide-react';
 import { useSesion } from '../sesion';
 
 // Cada rol ve solo las pantallas de su función (sección 3.1)
 const menu = [
-  { path: '/catalogo', label: 'Catálogo', icon: Building, roles: ['publico', 'paciente', 'admin'] },
+  { path: '/catalogo', label: 'Catálogo', icon: Building, roles: ['publico', 'paciente'] },
   { path: '/mis-citas', label: 'Mis citas', icon: CalendarDays, roles: ['paciente'] },
+  { path: '/dependientes', label: 'Dependientes', icon: UserPlus, roles: ['paciente'] },
   { path: '/agenda', label: 'Agenda', icon: ClipboardList, roles: ['recepcion', 'medico'] },
+  { path: '/verificar-dependientes', label: 'Dependientes', icon: FileCheck, roles: ['recepcion'] },
   { path: '/afiliados', label: 'Afiliados', icon: Users, roles: ['aseguradora'] },
-  { path: '/auditoria', label: 'Bitácora de auditoría', icon: ShieldAlert, roles: ['oficial_seguridad', 'dpd'] },
-  { path: '/perfil', label: 'Mi perfil', icon: User, roles: ['paciente', 'recepcion', 'medico', 'aseguradora', 'oficial_seguridad', 'dpd', 'admin'] },
+  { path: '/conciliacion', label: 'Conciliación', icon: Calculator, roles: ['contabilidad'] },
+  { path: '/admin/catalogo', label: 'Catálogo', icon: Settings, roles: ['admin'] },
+  { path: '/auditoria', label: 'Bitácora', icon: ShieldAlert, roles: ['oficial_seguridad', 'dpd'] },
+  { path: '/conservacion', label: 'Conservación', icon: Archive, roles: ['dpd'] },
+  { path: '/perfil', label: 'Mi perfil', icon: User,
+    roles: ['paciente', 'recepcion', 'medico', 'aseguradora', 'oficial_seguridad', 'dpd', 'admin', 'contabilidad'] },
 ];
 
 export default function Layout() {

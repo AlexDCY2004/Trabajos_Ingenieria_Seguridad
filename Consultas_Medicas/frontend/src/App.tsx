@@ -14,6 +14,12 @@ const pages = {
   AgendaPersonal: lazy(() => import('./pages/AgendaPersonal')),
   Afiliados: lazy(() => import('./pages/Afiliados')),
   Auditoria: lazy(() => import('./pages/Auditoria')),
+  VerificarCorreo: lazy(() => import('./pages/VerificarCorreo')),
+  Dependientes: lazy(() => import('./pages/Dependientes')),
+  VerificarDependientes: lazy(() => import('./pages/VerificarDependientes')),
+  Conciliacion: lazy(() => import('./pages/Conciliacion')),
+  AdminCatalogo: lazy(() => import('./pages/AdminCatalogo')),
+  Conservacion: lazy(() => import('./pages/Conservacion')),
 };
 
 const Cargando = () => (
@@ -69,6 +75,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={usuario ? <Navigate to={inicioDe(usuario)} replace /> : <pages.Login />} />
           <Route path="/registro" element={usuario ? <Navigate to={inicioDe(usuario)} replace /> : <pages.Registro />} />
+          <Route path="/verificar-correo" element={usuario ? <Navigate to={inicioDe(usuario)} replace /> : <pages.VerificarCorreo />} />
 
           <Route element={<Layout />}>
             <Route index element={<Navigate to={inicioDe(usuario)} replace />} />
@@ -83,6 +90,11 @@ export default function App() {
             <Route path="agenda" element={<Solo roles={['recepcion', 'medico']}><pages.AgendaPersonal /></Solo>} />
             <Route path="afiliados" element={<Solo roles={['aseguradora']}><pages.Afiliados /></Solo>} />
             <Route path="auditoria" element={<Solo roles={['oficial_seguridad', 'dpd']}><pages.Auditoria /></Solo>} />
+            <Route path="dependientes" element={<Solo roles={['paciente']}><pages.Dependientes /></Solo>} />
+            <Route path="verificar-dependientes" element={<Solo roles={['recepcion']}><pages.VerificarDependientes /></Solo>} />
+            <Route path="conciliacion" element={<Solo roles={['contabilidad']}><pages.Conciliacion /></Solo>} />
+            <Route path="admin/catalogo" element={<Solo roles={['admin']}><pages.AdminCatalogo /></Solo>} />
+            <Route path="conservacion" element={<Solo roles={['dpd']}><pages.Conservacion /></Solo>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

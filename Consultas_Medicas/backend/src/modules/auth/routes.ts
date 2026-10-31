@@ -449,7 +449,7 @@ router.get('/perfil', authenticate, ah(async (req, res) => {
 
     // RLS: el paciente solo ve su propio registro
     const p = (await db.query(
-      `SELECT nombres, apellidos, tipo_identificacion, correo, telefono, aseguradora,
+      `SELECT nombres, apellidos, tipo_identificacion, correo, telefono, aseguradora, mostrar_especialidad_recordatorio,
               numero_poliza_cifrada IS NOT NULL AS tiene_poliza
        FROM pacientes WHERE id = $1`,
       [user.paciente_id]

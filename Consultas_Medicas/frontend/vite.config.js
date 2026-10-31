@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const CSP =
-  "default-src 'self'; connect-src 'self' http://localhost:4000; img-src 'self' data:; " +
+  "default-src 'self'; connect-src 'self' http://localhost:4000; img-src 'self' data: blob:; " +
   "script-src 'self'; style-src 'self' 'unsafe-inline';";
 
 // La CSP solo se inyecta en el build: en `vite dev` el plugin de React usa un script

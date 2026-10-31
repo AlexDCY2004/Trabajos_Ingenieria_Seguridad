@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import { User, Shield, Mail, Phone, KeyRound, Building, CheckCircle, AlertCircle } from 'lucide-react';
+import { User, Shield, Mail, Phone, KeyRound, Building, CheckCircle, AlertCircle, Download, UserX } from 'lucide-react';
 import { authService, coberturaService, mensajeError } from '../services/api';
+import { useSesion } from '../sesion';
+import CodigoCorreo from '../components/CodigoCorreo';
 
 const ROLES: Record<string, string> = {
   paciente: 'Paciente', recepcion: 'Recepción', medico: 'Médico', aseguradora: 'Aseguradora',
@@ -24,6 +26,10 @@ export default function Perfil() {
   const [aseguradoras, setAseguradoras] = useState<string[]>([]);
   const [poliza, setPoliza] = useState({ aseguradora: '', numero_poliza: '', titular: '', beneficiario: '' });
   const [editandoPoliza, setEditandoPoliza] = useState(false);
+  const [codigoPoliza, setCodigoPoliza] = useState('');
+  const [dandoBaja, setDandoBaja] = useState(false);
+  const [codigoBaja, setCodigoBaja] = useState('');
+  const { cerrar } = useSesion();
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
 
   const cargar = useCallback(async () => {
@@ -55,15 +61,51 @@ export default function Perfil() {
   const guardarPoliza = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await coberturaService.registrarPoliza(poliza);
+      await coberturaService.registrarPoliza({ ...poliza, codigo: codigoPoliza });
+      setCodigoPoliza('');
       setMensaje({ texto: 'Póliza registrada. Se guardó cifrada.', tipo: 'exito' });
       setEditandoPoliza(false);
       setPoliza({ aseguradora: '', numero_poliza: '', titular: '', beneficiario: '' });
       cargar();
     } catch (err: any) {
-      const campos = err.response?.data?.detalles?.fieldErrors as Record<string, string[]> | undefined;
-      const detalle = campos ? Object.values(campos).flat()[0] : undefined;
-      setMensaje({ texto: detalle ?? mensajeError(err, 'No se pudo registrar la póliza'), tipo: 'error' });
+      setMensaje({ texto: mensajeError(err, 'No se pudo registrar la póliza'), tipo: 'error' });
+    }
+  };
+
+  const cambiarPreferencia = async (mostrar: boolean) => {
+    try {
+      await authService.preferencias(mostrar);
+      setPerfil({ ...perfil, mostrar_especialidad_recordatorio: mostrar });
+      setMensaje({ texto: 'Preferencia guardada', tipo: 'exito' });
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo guardar la preferencia'), tipo: 'error' });
+    }
+  };
+
+  // Derecho de acceso y portabilidad (UC09): descarga de sus datos en JSON
+  const descargarDatos = async () => {
+    try {
+      const r = await authService.misDatos();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(r.data, null, 2)], { type: 'application/json' }));
+      const enlace = document.createElement('a');
+      enlace.href = url;
+      enlace.download = 'mis-datos.json';
+      enlace.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudieron descargar sus datos'), tipo: 'error' });
+    }
+  };
+
+  // Derecho de eliminación (UC09): cancela las citas futuras y desactiva la cuenta
+  const darDeBaja = async () => {
+    if (!window.confirm('¿Dar de baja su cuenta? Sus citas futuras se cancelarán y no podrá volver a ingresar.')) return;
+    try {
+      await authService.baja(codigoBaja);
+      window.alert('Su cuenta fue dada de baja.');
+      cerrar();
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo dar de baja la cuenta'), tipo: 'error' });
     }
   };
 
@@ -125,8 +167,10 @@ export default function Perfil() {
                   onChange={(e) => setPoliza({ ...poliza, titular: e.target.value })} className={inputClase} />
                 <input placeholder="Beneficiario (si no es el titular)" maxLength={100} value={poliza.beneficiario}
                   onChange={(e) => setPoliza({ ...poliza, beneficiario: e.target.value })} className={inputClase} />
+                <CodigoCorreo accion="poliza" codigo={codigoPoliza} onCodigo={setCodigoPoliza} />
                 <div className="flex gap-2">
-                  <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">Guardar</button>
+                  <button type="submit" disabled={codigoPoliza.length !== 6}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-sm rounded-lg">Guardar</button>
                   <button type="button" onClick={() => setEditandoPoliza(false)}
                     className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg">Cancelar</button>
                 </div>
@@ -160,9 +204,44 @@ export default function Perfil() {
             <input type="checkbox" checked={publicidad} onChange={(e) => cambiarPublicidad(e.target.checked)} className="mt-0.5" />
             <span>Recibir publicidad de la red de consultorios (opcional, puede revocarlo cuando quiera).</span>
           </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" checked={!!perfil.mostrar_especialidad_recordatorio}
+              onChange={(e) => cambiarPreferencia(e.target.checked)} className="mt-0.5" />
+            <span>Mostrar la especialidad en los recordatorios (por defecto solo se indica fecha y hora).</span>
+          </label>
           <p className="text-xs text-gray-500">
-            Para ejercer sus derechos de acceso, rectificación, eliminación u oposición escriba a dpd@citas.com.
+            Para rectificación u oposición escriba al delegado de protección de datos: dpd@citas.com.
           </p>
+        </div>
+      )}
+
+      {esPaciente && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-3">
+          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider">Sus derechos</h3>
+          <button onClick={descargarDatos} className="flex items-center gap-2 text-sm text-blue-600 hover:underline">
+            <Download className="h-4 w-4" /> Descargar mis datos (acceso y portabilidad)
+          </button>
+          {!dandoBaja ? (
+            <button onClick={() => setDandoBaja(true)} className="flex items-center gap-2 text-sm text-red-600 hover:underline">
+              <UserX className="h-4 w-4" /> Dar de baja mi cuenta (eliminación)
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-gray-700">
+                Se cancelan sus citas futuras (con reembolso de lo pagado) y la cuenta se desactiva. Los datos se conservan
+                solo durante los plazos legales y luego se anonimizan.
+              </p>
+              <CodigoCorreo accion="baja" codigo={codigoBaja} onCodigo={setCodigoBaja} />
+              <div className="flex gap-2">
+                <button onClick={darDeBaja} disabled={codigoBaja.length !== 6}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm rounded-lg">
+                  Dar de baja
+                </button>
+                <button onClick={() => setDandoBaja(false)}
+                  className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg">Cancelar</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
