@@ -7,6 +7,7 @@ import { authenticate, AuthRequest } from '../../middlewares/auth';
 import { authorize } from '../../middlewares/rbac';
 import { ah, HttpError, exigirUuid } from '../../utils/http';
 import { notificarCita } from '../notificaciones/servicio';
+import { encolarHce } from '../hce/servicio';
 
 const router = Router();
 
@@ -90,7 +91,10 @@ async function procesarNotificacion(cuerpo: unknown, ip: string | undefined) {
     );
     await auditar(db, null, tardio ? 'PAGO_TARDIO_REEMBOLSADO' : 'WEBHOOK_PAGO', 'pago', p.id, ip,
       { referencia: n.referencia, estado: estadoPago });
-    if (!tardio) await auditar(db, null, 'CONFIRMAR', 'cita', p.cita_id, ip, { via: 'pago' });
+    if (!tardio && p.estado_cita === 'pendiente_pago') {
+      await encolarHce(db, p.cita_id, 'CITA_CONFIRMADA');
+      await auditar(db, null, 'CONFIRMAR', 'cita', p.cita_id, ip, { via: 'pago' });
+    }
     return { recibido: true, estado: estadoPago, citaConfirmada: tardio ? null : p.cita_id as string };
   });
 
@@ -100,9 +104,16 @@ async function procesarNotificacion(cuerpo: unknown, ip: string | undefined) {
   return respuesta;
 }
 
-// POST /pagos/webhook: público, autenticado por la firma HMAC de la pasarela.
-// En producción además se restringe a la lista de IP del proveedor (sección 3.2, integraciones).
+// Lista de IP de la pasarela (sección 3.2, integraciones). Vacía en desarrollo: solo la firma autentica.
+const IPS_PASARELA = (process.env.PASARELA_IPS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+const normalizarIp = (ip: string | undefined) => (ip ?? '').replace(/^::ffff:/, '');
+
+// POST /pagos/webhook: público, autenticado por la firma HMAC de la pasarela y su lista de IP
 router.post('/webhook', ah(async (req, res) => {
+  if (IPS_PASARELA.length > 0 && !IPS_PASARELA.includes(normalizarIp(req.ip))) {
+    await auditar(pool, null, 'WEBHOOK_PAGO', 'pago', null, req.ip, { motivo: 'ip_no_permitida' }, 'fallo');
+    throw new HttpError(403, 'Origen no permitido');
+  }
   res.json(await procesarNotificacion(req.body, req.ip));
 }));
 
@@ -183,6 +194,72 @@ if (process.env.NODE_ENV !== 'production') {
     res.json(await procesarNotificacion({ ...notificacion, firma: firmarNotificacion(notificacion) }, req.ip));
   }));
 }
+
+// ---------- Recepción / Cajas ----------
+
+// Cobro presencial (UC14). Con datáfono, recepción valida el comprobante de la pasarela: anota su
+// referencia y los 4 últimos dígitos que imprime. Nunca se escribe el número de tarjeta ni el CVV (S11).
+const cobroCajaSchema = z.discriminatedUnion('medio', [
+  z.object({ medio: z.literal('efectivo') }),
+  z.object({
+    medio: z.literal('datafono'),
+    referencia: z.string().trim().regex(/^[A-Za-z0-9_-]{4,64}$/, 'Referencia del comprobante: 4 a 64 letras, números o guiones'),
+    cuatro_ultimos: z.string().regex(/^\d{4}$/, 'Solo los 4 últimos dígitos de la tarjeta'),
+  }),
+]);
+
+// POST /pagos/caja/:cita_id: cobro manual del copago en la sede (RLS: solo citas de su sede)
+router.post('/caja/:cita_id', authenticate, authorize('recepcion'), ah(async (req, res) => {
+  const citaId = exigirUuid(req.params.cita_id, 'Cita inválida');
+  const parsed = cobroCajaSchema.safeParse(req.body);
+  if (!parsed.success) throw new HttpError(400, 'Datos del cobro inválidos', parsed.error.flatten());
+  const d = parsed.data;
+  const user = (req as AuthRequest).user!;
+
+  const resultado = await conClaims(claimsDe(user), async (db) => {
+    await db.query('SELECT expirar_retenciones()');
+    const c = (await db.query(
+      `SELECT estado, estado_pago, monto_copago, codigo_cita FROM citas WHERE id = $1 FOR UPDATE`, [citaId])).rows[0];
+    if (!c) throw new HttpError(404, 'Cita no encontrada');
+    if (!['pendiente_pago', 'confirmada'].includes(c.estado)) {
+      throw new HttpError(409, 'Esta cita no tiene un cobro pendiente');
+    }
+    if (c.estado_pago === 'pagado') throw new HttpError(409, 'La cita ya está pagada');
+    const monto = Number(c.monto_copago ?? 0);
+    if (!(monto > 0)) throw new HttpError(409, 'Esta cita no tiene valor a cobrar');
+
+    const referencia = d.medio === 'datafono' ? d.referencia : 'CAJA-' + crypto.randomBytes(6).toString('hex');
+    const token = d.medio === 'datafono' ? `pos_${d.referencia}` : 'caja_efectivo';
+    const p = await db.query(
+      `INSERT INTO pagos (cita_id, monto, token_pasarela, estado, referencia, cuatro_ultimos, medio, registrado_por)
+       VALUES ($1, $2, $3, 'pagado', $4, $5, 'caja', $6)
+       ON CONFLICT (cita_id) DO UPDATE
+         SET monto = EXCLUDED.monto, token_pasarela = EXCLUDED.token_pasarela, estado = 'pagado',
+             referencia = EXCLUDED.referencia, cuatro_ultimos = EXCLUDED.cuatro_ultimos, medio = 'caja',
+             registrado_por = EXCLUDED.registrado_por, actualizado_en = now()
+         WHERE pagos.estado NOT IN ('pagado', 'reembolsado')
+       RETURNING id`,
+      [citaId, monto, token, referencia, d.medio === 'datafono' ? d.cuatro_ultimos : null, user.sub]
+    );
+    if (p.rows.length === 0) throw new HttpError(409, 'La cita ya está pagada');
+
+    // Figura 11: PendientePago -> Confirmada también cuando el pago se registra en caja
+    const confirma = c.estado === 'pendiente_pago';
+    await db.query(
+      `UPDATE citas SET estado_pago = 'pagado', referencia_pasarela = $2,
+              estado = 'confirmada', retencion_expira_en = NULL, actualizado_en = now()
+       WHERE id = $1`,
+      [citaId, referencia]
+    );
+    if (confirma) await encolarHce(db, citaId, 'CITA_CONFIRMADA');
+    await auditar(db, user.sub, 'COBRO_MANUAL', 'pago', p.rows[0].id, req.ip,
+      { cita_id: citaId, medio: d.medio, monto, referencia, confirma });
+    return { monto, referencia, confirma, codigo_cita: c.codigo_cita };
+  });
+
+  if (resultado.confirma) void notificarCita(citaId, 'cita_confirmada');
+  res.json({ mensaje: `Cobro de $${resultado.monto.toFixed(2)} registrado (${resultado.referencia})`, ...resultado });
+}));
 
 // GET /pagos/estado/:cita_id (paciente: sus citas; recepción: su sede). Solo estado y 4 últimos dígitos.
 router.get('/estado/:cita_id', authenticate, authorize('paciente', 'recepcion'), ah(async (req, res) => {

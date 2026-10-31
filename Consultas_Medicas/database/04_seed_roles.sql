@@ -7,5 +7,6 @@ INSERT INTO roles (nombre, descripcion) VALUES
     ('admin',             'Administrador del sistema'),
     ('oficial_seguridad', 'Oficial de seguridad: revisa la bitácora de auditoría'),
     ('dpd',               'Delegado de protección de datos'),
-    ('contabilidad',      'Contabilidad: concilia pagos, solo lectura y sin datos clínicos')
+    ('contabilidad',      'Contabilidad: concilia pagos, solo lectura y sin datos clínicos'),
+    ('soporte',           'Soporte técnico / DevOps: opera la plataforma sin datos de pacientes; acceso de emergencia aprobado')
 ON CONFLICT (nombre) DO NOTHING;

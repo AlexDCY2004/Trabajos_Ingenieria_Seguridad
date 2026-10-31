@@ -22,6 +22,7 @@ export const INICIO_POR_ROL: Record<string, string> = {
   dpd: '/auditoria',
   admin: '/admin/catalogo',
   contabilidad: '/conciliacion',
+  soporte: '/soporte',
 };
 
 export const inicioDe = (usuario: UsuarioSesion | null) =>

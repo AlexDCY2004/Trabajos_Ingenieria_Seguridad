@@ -15,6 +15,8 @@ interface Cita {
   estado_pago: string | null;
   monto_copago: string | null;
   cubierta: boolean | null;
+  autorizacion_pendiente: boolean | null;
+  mensaje_cobertura: string | null;
   profesional_id: string;
   veces_reprogramada: number;
   dependiente: string | null;
@@ -26,6 +28,8 @@ interface Cita {
 
 export const ESTADOS_CITA: Record<string, { texto: string; clase: string }> = {
   retenida: { texto: 'Retenida', clase: 'bg-blue-100 text-blue-800' },
+  en_verificacion: { texto: 'Verificando cobertura', clase: 'bg-blue-100 text-blue-800' },
+  sin_cobertura: { texto: 'Sin cobertura', clase: 'bg-amber-100 text-amber-800' },
   pendiente_pago: { texto: 'Pendiente de pago', clase: 'bg-amber-100 text-amber-800' },
   confirmada: { texto: 'Confirmada', clase: 'bg-green-100 text-green-800' },
   atendida: { texto: 'Atendida', clase: 'bg-gray-100 text-gray-700' },
@@ -90,7 +94,10 @@ export default function MisCitas() {
   const puedePagar = (c: Cita) => ['pendiente_pago', 'confirmada'].includes(c.estado)
     && ['pendiente', 'rechazado'].includes(c.estado_pago ?? '') && Number(c.monto_copago) > 0 && futura(c);
   const puedeReprogramar = (c: Cita) => c.estado === 'confirmada' && futura(c) && c.veces_reprogramada < 2;
-  const puedeCancelar = (c: Cita) => ['retenida', 'pendiente_pago', 'confirmada'].includes(c.estado) && futura(c);
+  const puedeCancelar = (c: Cita) =>
+    ['retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago', 'confirmada'].includes(c.estado) && futura(c);
+  // Reserva en curso (Figura 11): se continúa en la pantalla de reserva del profesional
+  const enCurso = (c: Cita) => ['retenida', 'en_verificacion', 'sin_cobertura'].includes(c.estado);
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -127,6 +134,7 @@ export default function MisCitas() {
                       <MapPin className="h-3.5 w-3.5" /> {c.sede} · {c.sede_direccion}
                     </p>
                     {c.dependiente && <p className="text-xs text-blue-700">Para: {c.dependiente}</p>}
+                    {enCurso(c) && c.mensaje_cobertura && <p className="text-xs text-gray-600">{c.mensaje_cobertura}</p>}
                     <p className="text-xs text-gray-500">Código {c.codigo_cita}</p>
                   </div>
                   <div className="text-right space-y-1">
@@ -152,6 +160,12 @@ export default function MisCitas() {
                     }} />
                 ) : (
                   <div className="flex gap-2">
+                    {enCurso(c) && (
+                      <Link to={`/reserva/${c.profesional_id}`} state={{ citaId: c.id }}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">
+                        Continuar reserva
+                      </Link>
+                    )}
                     {puedePagar(c) && (
                       <button onClick={() => setPagando(c.id)}
                         className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">
@@ -167,7 +181,7 @@ export default function MisCitas() {
                     {puedeCancelar(c) && (
                       <button onClick={() => cancelar(c)}
                         className="px-3 py-1.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm rounded-lg">
-                        Cancelar
+                        {enCurso(c) ? 'Desistir' : 'Cancelar'}
                       </button>
                     )}
                   </div>

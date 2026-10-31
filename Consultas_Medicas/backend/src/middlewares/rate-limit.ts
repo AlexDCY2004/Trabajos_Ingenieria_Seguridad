@@ -1,8 +1,10 @@
 import rateLimit from 'express-rate-limit';
 
+// Por IP. La prueba de carga (pruebas/carga.k6.js) sale de una sola IP: el pipeline lo sube con
+// RATE_LIMIT_POR_MINUTO. En producción el WAF aplica además su propio límite por cliente.
 export const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: Number(process.env.RATE_LIMIT_POR_MINUTO) || 120,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas peticiones, intente de nuevo más tarde' },

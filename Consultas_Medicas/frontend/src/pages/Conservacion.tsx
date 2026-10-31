@@ -18,6 +18,8 @@ const ETIQUETAS: Record<string, string> = {
   coberturas_eliminadas: 'Resultados de cobertura eliminados',
   documentos_eliminados: 'Documentos eliminados',
   notificaciones_eliminadas: 'Notificaciones eliminadas',
+  envios_hce_eliminados: 'Envíos a la HCE eliminados',
+  accesos_emergencia_cerrados: 'Accesos de emergencia vencidos cerrados',
   tokens_revocados_eliminados: 'Tokens revocados vencidos',
 };
 

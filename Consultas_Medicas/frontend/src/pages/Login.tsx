@@ -26,15 +26,28 @@ export default function Login() {
   const [mfa, setMfa] = useState<PasoMfa | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // CAPTCHA adaptativo (R15): aparece tras varios intentos fallidos; cada desafío sirve una sola vez
+  const [desafio, setDesafio] = useState<{ id: string; pregunta: string } | null>(null);
+  const [respuesta, setRespuesta] = useState('');
 
   const entrar = (data: any) => iniciar(data.accessToken, data.usuario, desde);
+
+  const pedirDesafio = async () => {
+    setRespuesta('');
+    try {
+      setDesafio((await authService.desafio()).data);
+    } catch {
+      setDesafio(null);
+    }
+  };
 
   const enviarCredenciales = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      const res = await authService.login(email, password);
+      const res = await authService.login(email, password, desafio ? { id: desafio.id, respuesta } : undefined);
+      setDesafio(null);
       if (res.data.mfa) {
         setMfa({ tipo: res.data.mfa, mfa_token: res.data.mfa_token, secreto: res.data.secreto, qr: res.data.qr });
         setPassword('');
@@ -43,10 +56,14 @@ export default function Login() {
       }
     } catch (err: any) {
       if (err.response?.data?.verificar_correo) {
-        navigate('/verificar-correo', { state: { email, aviso: err.response.data.error } });
+        navigate('/verificar-correo', {
+          state: { email, aviso: err.response.data.error, pendientes: err.response.data.pendientes },
+        });
         return;
       }
       setError(mensajeError(err, 'Credenciales inválidas'));
+      if (err.response?.data?.captcha_requerido) await pedirDesafio();
+      else setDesafio(null);
     } finally {
       setLoading(false);
     }
@@ -97,6 +114,17 @@ export default function Login() {
                   onChange={(e) => setPassword(e.target.value)} required className={inputClase} />
               </div>
             </div>
+            {desafio && (
+              <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-sm text-amber-900">Hubo varios intentos fallidos. Para continuar, responda:</p>
+                <label className="flex items-center gap-3 text-sm font-medium text-gray-800">
+                  {desafio.pregunta}
+                  <input inputMode="numeric" maxLength={3} required value={respuesta} aria-label="Respuesta de la verificación"
+                    onChange={(e) => setRespuesta(e.target.value.replace(/\D/g, ''))}
+                    className="w-20 px-3 py-1.5 border border-gray-300 rounded-lg text-center" />
+                </label>
+              </div>
+            )}
             <Error />
             <button type="submit" disabled={loading}
               className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-semibold rounded-lg transition-colors">

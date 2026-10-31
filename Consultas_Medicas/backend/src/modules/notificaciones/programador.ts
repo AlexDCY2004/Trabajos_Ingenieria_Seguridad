@@ -1,5 +1,7 @@
-import { conClaims, CLAIMS_SISTEMA, auditar } from '../../config/database';
+import { pool, conClaims, CLAIMS_SISTEMA, auditar } from '../../config/database';
 import { notificarCita } from './servicio';
+import { procesarBandejaHce } from '../hce/servicio';
+import { DIAS_INACTIVIDAD_PERSONAL } from '../seguridad/routes';
 
 const MINUTO = 60 * 1000;
 
@@ -24,6 +26,21 @@ export async function aplicarConservacion(rol: 'sistema' | 'dpd', usuarioId: str
   });
 }
 
+// Desactivación por inactividad de las cuentas del personal (R05). La reactiva el oficial de seguridad.
+async function desactivarInactivos() {
+  const r = await pool.query(
+    `UPDATE usuarios u SET activo = false, desactivado_en = now(), actualizado_en = now()
+     FROM roles r
+     WHERE r.id = u.rol_id AND r.nombre <> 'paciente' AND u.activo
+       AND COALESCE(u.fecha_ultimo_acceso, u.creado_en) < now() - make_interval(days => $1)
+     RETURNING u.id`,
+    [DIAS_INACTIVIDAD_PERSONAL]
+  );
+  for (const { id } of r.rows) {
+    await auditar(pool, null, 'DESACTIVAR_INACTIVIDAD', 'usuario', id, undefined, { dias: DIAS_INACTIVIDAD_PERSONAL });
+  }
+}
+
 function cadaCierto(nombre: string, tarea: () => Promise<unknown>, primeraVez: number, intervalo: number) {
   const ejecutar = () => tarea().catch((err) => console.error(`[programador] ${nombre}:`, err.message));
   setTimeout(ejecutar, primeraVez).unref();
@@ -32,5 +49,7 @@ function cadaCierto(nombre: string, tarea: () => Promise<unknown>, primeraVez: n
 
 export function iniciarTareasProgramadas() {
   cadaCierto('recordatorios', enviarRecordatorios, 30 * 1000, 10 * MINUTO);
+  cadaCierto('HCE', procesarBandejaHce, 20 * 1000, MINUTO);
   cadaCierto('conservación', () => aplicarConservacion('sistema', null), 2 * MINUTO, 24 * 60 * MINUTO);
+  cadaCierto('inactividad', desactivarInactivos, 3 * MINUTO, 24 * 60 * MINUTO);
 }

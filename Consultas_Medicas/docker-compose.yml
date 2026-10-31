@@ -90,6 +90,11 @@ services:
       SMTP_PORT: 1025
       CORREO_REMITENTE: Portal de Citas <no-responder@citas.local>
       URL_PORTAL: http://localhost:5173
+      # Integraciones externas. Sin valor, el SMS llega a Mailpit y el envío a la HCE solo se registra en el log.
+      # SMS_API_URL / SMS_API_KEY: proveedor de mensajería. HCE_URL / HCE_API_KEY: API interna de la HCE.
+      # PASARELA_IPS: lista de IP de la pasarela (separadas por coma) permitidas en el webhook.
+      # Límite global de peticiones por IP y minuto (el pipeline lo sube para la prueba de carga k6)
+      RATE_LIMIT_POR_MINUTO: ${RATE_LIMIT_POR_MINUTO:-120}
       CORS_ORIGIN: http://localhost:5173
       PORT: 4000
       NODE_ENV: development

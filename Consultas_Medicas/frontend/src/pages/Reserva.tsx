@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
-import { Calendar, Clock, AlertCircle, CheckCircle, ArrowLeft, MapPin, Stethoscope, ShieldCheck, LogIn } from 'lucide-react';
+import {
+  Calendar, Clock, AlertCircle, CheckCircle, ArrowLeft, MapPin, Stethoscope, ShieldCheck, LogIn, Hourglass, ShieldOff,
+} from 'lucide-react';
 import { agendaService, coberturaService, dependientesService, mensajeError } from '../services/api';
 import { formatoDia, formatoHora, formatoFechaHora, claveDia, formatoDinero } from '../utils/fechas';
 import { useSesion } from '../sesion';
@@ -22,22 +24,30 @@ interface Profesional {
 
 interface Cobertura {
   cobertura: boolean;
-  copago: number;
+  copago: number | null;
   pago_particular: boolean;
+  pendiente?: boolean;
   aseguradora: string | null;
   codigo_autorizacion: string | null;
+  mensaje?: string;
 }
 
-// Estados de la cita en curso (Figura 11): retenida -> (cobertura) -> pendiente_pago -> confirmada
+// Estados de la cita en curso (Figura 11):
+//   retenida -> en_verificacion -> (aprobada) pendiente_pago / confirmada
+//                               -> (autorización previa) espera a la aseguradora
+//            -> sin_cobertura   -> pago particular (pendiente_pago) o desistir
+type EstadoEnCurso = 'retenida' | 'en_verificacion' | 'sin_cobertura' | 'pendiente_pago';
 interface EnCurso {
   id: string;
   codigo_cita: string;
   fecha_hora: string;
-  estado: 'retenida' | 'pendiente_pago';
+  estado: EstadoEnCurso;
   expira_en: string;
   cobertura?: Cobertura;
   monto?: number;
 }
+
+const EN_CURSO: string[] = ['retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago'];
 
 export default function Reserva() {
   const { profesionalId } = useParams();
@@ -45,6 +55,8 @@ export default function Reserva() {
   const location = useLocation();
   const { usuario } = useSesion();
   const esPaciente = usuario?.rol === 'paciente';
+  // Al volver desde "Mis citas" se retoma la reserva en curso
+  const citaARetomar = (location.state as { citaId?: string } | null)?.citaId;
 
   const [profesional, setProfesional] = useState<Profesional | null>(null);
   const [horarios, setHorarios] = useState<Horario[]>([]);
@@ -90,18 +102,59 @@ export default function Reserva() {
     cargarHorarios();
   }, [cargarHorarios]);
 
-  // Cuenta regresiva de la retención o de la ventana de pago
+  // Estado actual de la cita en el servidor (respuesta de la aseguradora o vencimiento)
+  const refrescar = useCallback(async (id: string) => {
+    try {
+      const c = (await agendaService.cita(id)).data;
+      if (!EN_CURSO.includes(c.estado)) {
+        if (c.estado === 'confirmada') terminar(`Cita confirmada para el ${formatoFechaHora(c.fecha_hora)}. Código: ${c.codigo_cita}`, 'exito');
+        else terminar('El tiempo de la reserva venció y el horario se liberó. Elija uno de nuevo.', 'error');
+        return;
+      }
+      setEnCurso((actual) => {
+        // Sin cambios: se conserva el objeto para no reiniciar la cuenta regresiva (reloj del navegador adelantado)
+        if (actual && actual.id === c.id && actual.estado === c.estado && actual.expira_en === c.expira_en
+            && !!actual.cobertura?.pendiente === !!c.cobertura?.pendiente) return actual;
+        return {
+          id: c.id, codigo_cita: c.codigo_cita, fecha_hora: c.fecha_hora, estado: c.estado, expira_en: c.expira_en,
+          cobertura: c.cobertura ?? undefined,
+          monto: c.estado === 'pendiente_pago' ? Number(c.monto_copago) : actual?.monto,
+        };
+      });
+    } catch {
+      terminar('No se pudo consultar la reserva', 'error');
+    }
+  }, [terminar]);
+
+  useEffect(() => {
+    if (citaARetomar && esPaciente) refrescar(citaARetomar);
+  }, [citaARetomar, esPaciente, refrescar]);
+
+  // Cuenta regresiva de la retención. Al llegar a cero se consulta el servidor: si la aseguradora no
+  // respondió, la cita pasa a "sin cobertura" con unos minutos más para decidir.
   useEffect(() => {
     if (!enCurso) return;
+    let consultado = false;
     const tick = () => {
       const s = Math.max(0, Math.floor((new Date(enCurso.expira_en).getTime() - Date.now()) / 1000));
       setSegundosRestantes(s);
-      if (s === 0) terminar('El tiempo de la reserva venció y el horario se liberó. Elija uno de nuevo.', 'error');
+      if (s === 0 && !consultado) {
+        consultado = true;
+        refrescar(enCurso.id);
+      }
     };
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [enCurso, terminar]);
+  }, [enCurso, refrescar]);
+
+  // Autorización previa (UC18): se consulta cada 5 segundos si la aseguradora ya respondió
+  const esperandoAseguradora = enCurso?.estado === 'en_verificacion' && !!enCurso.cobertura?.pendiente;
+  useEffect(() => {
+    if (!esperandoAseguradora || !enCurso) return;
+    const t = setInterval(() => refrescar(enCurso.id), 5000);
+    return () => clearInterval(t);
+  }, [esperandoAseguradora, enCurso?.id, refrescar]);
 
   const porDia = useMemo(() => {
     const grupos = new Map<string, Horario[]>();
@@ -127,7 +180,8 @@ export default function Reserva() {
       setVerificando(true);
       try {
         const cob = await coberturaService.verificar(cita.id);
-        setEnCurso((c) => (c && c.id === cita.id ? { ...c, cobertura: cob.data.resultado } : c));
+        setEnCurso((c) => (c && c.id === cita.id
+          ? { ...c, estado: cob.data.estado, expira_en: cob.data.expira_en, cobertura: cob.data.resultado } : c));
       } catch (err: any) {
         setMensaje({ texto: mensajeError(err, 'No se pudo verificar la cobertura'), tipo: 'error' });
       } finally {
@@ -152,12 +206,14 @@ export default function Reserva() {
         terminar(`Cita confirmada para el ${formatoFechaHora(enCurso.fecha_hora)}. Código: ${res.data.codigo_cita}`, 'exito');
       }
     } catch (err: any) {
-      terminar(mensajeError(err, 'No se pudo confirmar la cita'), 'error');
+      if (err.response?.status === 409 && esperandoAseguradora) setMensaje({ texto: mensajeError(err, ''), tipo: 'error' });
+      else terminar(mensajeError(err, 'No se pudo confirmar la cita'), 'error');
     } finally {
       setEnviando(false);
     }
   };
 
+  // Liberar el horario o desistir (Figura 11: SinCobertura -> paciente desiste -> Cancelada)
   const liberar = async () => {
     if (!enCurso) return;
     setEnviando(true);
@@ -174,6 +230,18 @@ export default function Reserva() {
   const mm = Math.floor(segundosRestantes / 60).toString().padStart(2, '0');
   const ss = (segundosRestantes % 60).toString().padStart(2, '0');
   const cob = enCurso?.cobertura;
+  const puedeConfirmar = !!enCurso && !verificando && !!cob && !cob.pendiente
+    && (enCurso.estado === 'en_verificacion' || enCurso.estado === 'sin_cobertura');
+  const titulo: Record<EstadoEnCurso, string> = {
+    retenida: 'Horario retenido',
+    en_verificacion: esperandoAseguradora ? 'Esperando autorización de la aseguradora' : 'Cobertura verificada',
+    sin_cobertura: 'Sin cobertura del seguro',
+    pendiente_pago: 'Pendiente de pago',
+  };
+  const accionPendiente: Record<EstadoEnCurso, string> = {
+    retenida: 'confirmar', en_verificacion: esperandoAseguradora ? 'recibir la respuesta' : 'confirmar',
+    sin_cobertura: 'decidir', pendiente_pago: 'pagar',
+  };
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
@@ -210,38 +278,47 @@ export default function Reserva() {
         <div className="bg-blue-50 p-6 rounded-xl border border-blue-200 space-y-4">
           <div className="flex items-center gap-2 text-blue-800">
             <Clock className="h-5 w-5" />
-            <span>
-              {enCurso.estado === 'retenida' ? 'Horario retenido' : 'Pendiente de pago'}:{' '}
-              <strong>{formatoFechaHora(enCurso.fecha_hora)}</strong>
-            </span>
+            <span>{titulo[enCurso.estado]}: <strong>{formatoFechaHora(enCurso.fecha_hora)}</strong></span>
           </div>
           <p className="text-sm text-blue-800">
-            Tiene <strong>{mm}:{ss}</strong> para {enCurso.estado === 'retenida' ? 'confirmar' : 'pagar'}.
-            Código: <strong>{enCurso.codigo_cita}</strong>
+            Tiene <strong>{mm}:{ss}</strong> para {accionPendiente[enCurso.estado]}. Código: <strong>{enCurso.codigo_cita}</strong>
           </p>
 
-          {enCurso.estado === 'retenida' && (
-            verificando || !cob ? (
-              <p className="text-sm text-blue-800">{verificando ? 'Verificando su cobertura con la aseguradora...' : ''}</p>
-            ) : (
-              <div className="rounded-lg bg-white border border-blue-100 p-4 text-sm space-y-1">
-                <p className="flex items-center gap-2 font-medium text-gray-800">
-                  <ShieldCheck className="h-4 w-4 text-blue-600" />
-                  {cob.cobertura
-                    ? `Cubierto por ${cob.aseguradora}`
-                    : 'Sin cobertura de seguro: pago particular'}
+          {(verificando || enCurso.estado === 'retenida') && (
+            <p className="text-sm text-blue-800">{verificando ? 'Verificando su cobertura con la aseguradora...' : ''}</p>
+          )}
+
+          {esperandoAseguradora && (
+            <div className="rounded-lg bg-white border border-blue-100 p-4 text-sm space-y-1">
+              <p className="flex items-center gap-2 font-medium text-gray-800">
+                <Hourglass className="h-4 w-4 text-blue-600" /> {cob?.mensaje}
+              </p>
+              <p className="text-gray-600">
+                Esta prestación requiere autorización previa. La pantalla se actualiza sola cuando la aseguradora responda;
+                también le avisaremos por correo. Si no responde a tiempo podrá pagar como particular.
+              </p>
+            </div>
+          )}
+
+          {(enCurso.estado === 'en_verificacion' || enCurso.estado === 'sin_cobertura') && cob && !cob.pendiente && !verificando && (
+            <div className="rounded-lg bg-white border border-blue-100 p-4 text-sm space-y-1">
+              <p className="flex items-center gap-2 font-medium text-gray-800">
+                {cob.cobertura
+                  ? <><ShieldCheck className="h-4 w-4 text-blue-600" /> Cubierto por {cob.aseguradora}</>
+                  : <><ShieldOff className="h-4 w-4 text-amber-600" /> {cob.mensaje ?? 'Sin cobertura de seguro'}</>}
+              </p>
+              <p className="text-gray-700">
+                {Number(cob.copago) > 0
+                  ? <>{cob.cobertura ? 'Copago' : 'Valor de la consulta particular'}: <strong>{formatoDinero(cob.copago)}</strong></>
+                  : 'No tiene valor a pagar.'}
+              </p>
+              {cob.codigo_autorizacion && <p className="text-xs text-gray-500">Autorización {cob.codigo_autorizacion}</p>}
+              {!cob.cobertura && (
+                <p className="text-xs text-gray-500">
+                  Puede pagar como particular o desistir. ¿Tiene seguro? Regístrelo en <Link to="/perfil" className="underline">Mi perfil</Link> antes de reservar.
                 </p>
-                <p className="text-gray-700">
-                  {cob.copago > 0 ? <>Valor a pagar: <strong>{formatoDinero(cob.copago)}</strong></> : 'No tiene valor a pagar.'}
-                </p>
-                {cob.codigo_autorizacion && <p className="text-xs text-gray-500">Autorización {cob.codigo_autorizacion}</p>}
-                {!cob.cobertura && (
-                  <p className="text-xs text-gray-500">
-                    ¿Tiene seguro? Regístrelo en <Link to="/perfil" className="underline">Mi perfil</Link> antes de reservar.
-                  </p>
-                )}
-              </div>
-            )
+              )}
+            </div>
           )}
 
           {enCurso.estado === 'pendiente_pago' && enCurso.monto !== undefined && (
@@ -250,15 +327,16 @@ export default function Reserva() {
           )}
 
           <div className="flex gap-3">
-            {enCurso.estado === 'retenida' && cob && !verificando && (
+            {puedeConfirmar && cob && (
               <button onClick={confirmar} disabled={enviando}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm rounded-lg">
-                {cob.copago > 0 ? `Aceptar y continuar al pago` : 'Confirmar cita'}
+                {enCurso.estado === 'sin_cobertura' ? 'Pagar como particular'
+                  : Number(cob.copago) > 0 ? 'Aceptar y continuar al pago' : 'Confirmar cita'}
               </button>
             )}
             <button onClick={liberar} disabled={enviando}
               className="px-4 py-2 bg-white border border-gray-300 hover:bg-gray-50 disabled:opacity-50 text-gray-700 text-sm rounded-lg">
-              Elegir otro horario
+              {enCurso.estado === 'sin_cobertura' ? 'Desistir' : 'Elegir otro horario'}
             </button>
           </div>
         </div>

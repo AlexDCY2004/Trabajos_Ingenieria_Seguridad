@@ -1,13 +1,27 @@
 import { useEffect, useState, useCallback } from 'react';
-import { User, Shield, Mail, Phone, KeyRound, Building, CheckCircle, AlertCircle, Download, UserX } from 'lucide-react';
-import { authService, coberturaService, mensajeError } from '../services/api';
+import {
+  User, Shield, Mail, Phone, KeyRound, Building, CheckCircle, AlertCircle, Download, UserX, Scale,
+} from 'lucide-react';
+import { authService, coberturaService, derechosService, mensajeError } from '../services/api';
 import { useSesion } from '../sesion';
 import CodigoCorreo from '../components/CodigoCorreo';
 
 const ROLES: Record<string, string> = {
   paciente: 'Paciente', recepcion: 'Recepción', medico: 'Médico', aseguradora: 'Aseguradora',
   oficial_seguridad: 'Oficial de seguridad', dpd: 'Delegado de protección de datos', admin: 'Administrador de catálogo',
+  contabilidad: 'Contabilidad', soporte: 'Soporte técnico / DevOps',
 };
+
+// Derechos que el DPD atiende (UC09). Acceso, portabilidad y eliminación además tienen autoservicio abajo.
+export const TIPOS_DERECHO: Record<string, string> = {
+  rectificacion: 'Rectificación', oposicion: 'Oposición', suspension: 'Suspensión del tratamiento',
+  acceso: 'Acceso', eliminacion: 'Eliminación', portabilidad: 'Portabilidad',
+};
+
+interface SolicitudDerecho {
+  id: string; tipo: string; detalle: string; estado: string; respuesta: string | null;
+  plazo_vence_en: string; creado_en: string;
+}
 
 const Dato = ({ icono: Icono, titulo, valor }: { icono: typeof User; titulo: string; valor: string }) => (
   <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border border-gray-100">
@@ -31,6 +45,8 @@ export default function Perfil() {
   const [codigoBaja, setCodigoBaja] = useState('');
   const { cerrar } = useSesion();
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
+  const [solicitudes, setSolicitudes] = useState<SolicitudDerecho[]>([]);
+  const [nuevaSolicitud, setNuevaSolicitud] = useState({ tipo: 'rectificacion', detalle: '' });
 
   const cargar = useCallback(async () => {
     try {
@@ -40,6 +56,7 @@ export default function Perfil() {
         const consentimientos = (await authService.consentimientos()).data as { tipo: string; aceptado: boolean }[];
         setPublicidad(consentimientos.find((c) => c.tipo === 'publicidad')?.aceptado ?? false);
         setAseguradoras((await coberturaService.aseguradoras()).data);
+        setSolicitudes((await derechosService.mias()).data);
       }
     } finally {
       setCargando(false);
@@ -97,6 +114,18 @@ export default function Perfil() {
     }
   };
 
+  const presentarSolicitud = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const r = await derechosService.presentar(nuevaSolicitud.tipo, nuevaSolicitud.detalle);
+      setMensaje({ texto: r.data.mensaje, tipo: 'exito' });
+      setNuevaSolicitud({ tipo: 'rectificacion', detalle: '' });
+      setSolicitudes((await derechosService.mias()).data);
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo presentar la solicitud'), tipo: 'error' });
+    }
+  };
+
   // Derecho de eliminación (UC09): cancela las citas futuras y desactiva la cuenta
   const darDeBaja = async () => {
     if (!window.confirm('¿Dar de baja su cuenta? Sus citas futuras se cancelarán y no podrá volver a ingresar.')) return;
@@ -137,7 +166,8 @@ export default function Perfil() {
           {esPaciente ? (
             <>
               <Dato icono={Mail} titulo="Correo" valor={perfil.correo} />
-              <Dato icono={Phone} titulo="Teléfono" valor={perfil.telefono} />
+              <Dato icono={Phone} titulo="Teléfono"
+                valor={`${perfil.telefono}${perfil.telefono_verificado ? ' · verificado' : ' · sin verificar'}`} />
               <Dato icono={User} titulo="Tipo de identificación" valor={perfil.tipo_identificacion} />
             </>
           ) : (
@@ -209,9 +239,36 @@ export default function Perfil() {
               onChange={(e) => cambiarPreferencia(e.target.checked)} className="mt-0.5" />
             <span>Mostrar la especialidad en los recordatorios (por defecto solo se indica fecha y hora).</span>
           </label>
-          <p className="text-xs text-gray-500">
-            Para rectificación u oposición escriba al delegado de protección de datos: dpd@citas.com.
-          </p>
+        </div>
+      )}
+
+      {esPaciente && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-3">
+          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+            <Scale className="h-4 w-4" /> Solicitudes al delegado de protección de datos
+          </h3>
+          <form onSubmit={presentarSolicitud} className="space-y-2">
+            <select value={nuevaSolicitud.tipo} onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, tipo: e.target.value })}
+              className={inputClase}>
+              {Object.entries(TIPOS_DERECHO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <textarea required minLength={10} maxLength={1000} rows={3} value={nuevaSolicitud.detalle}
+              placeholder="Describa qué dato o tratamiento se refiere su solicitud. No incluya información médica."
+              onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, detalle: e.target.value })} className={inputClase} />
+            <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">Presentar solicitud</button>
+          </form>
+          {solicitudes.map((s) => (
+            <div key={s.id} className="text-sm border border-gray-100 bg-gray-50 rounded-lg p-3 space-y-1">
+              <p className="font-medium">
+                {TIPOS_DERECHO[s.tipo] ?? s.tipo} ·{' '}
+                <span className={s.estado === 'recibida' ? 'text-amber-700' : s.estado === 'atendida' ? 'text-green-700' : 'text-red-700'}>
+                  {s.estado === 'recibida' ? `en trámite (respuesta hasta el ${new Date(s.plazo_vence_en).toLocaleDateString('es-EC')})` : s.estado}
+                </span>
+              </p>
+              <p className="text-gray-600">{s.detalle}</p>
+              {s.respuesta && <p className="text-gray-800"><strong>Respuesta:</strong> {s.respuesta}</p>}
+            </div>
+          ))}
         </div>
       )}
 

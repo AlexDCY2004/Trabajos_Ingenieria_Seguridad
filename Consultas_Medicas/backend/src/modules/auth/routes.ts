@@ -11,10 +11,13 @@ import {
 import {
   setRevokedToken, guardarRefreshVigente, refreshVigente, revocarFamilia, intentosFallidos,
   registrarIntentoFallido, limpiarIntentos, registrarPasoTotp, MAX_INTENTOS_LOGIN,
-  emitirCodigo, consumirCodigo,
+  emitirCodigo, consumirCodigo, UMBRAL_CAPTCHA, crearDesafio, resolverDesafio,
 } from '../../config/redis';
 import { enmascararCorreo } from '../../config/correo';
-import { enviarCodigo, notificarUsuario, notificarCita } from '../notificaciones/servicio';
+import { enmascararTelefono } from '../../config/sms';
+import { enviarCodigo, enviarCodigoSms, notificarUsuario, notificarCita } from '../notificaciones/servicio';
+import { encolarHce } from '../hce/servicio';
+import { motivoContrasenaDebil, filtradaEnHibp } from '../../utils/contrasenas';
 import { hmacIdentificacion } from '../../utils/identificacion';
 import { exigirCodigo } from '../../utils/codigos';
 import { authenticate, AuthRequest } from '../../middlewares/auth';
@@ -88,6 +91,9 @@ const ROL_REGISTRO = 'paciente';
 const loginSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(LIMITES.password.max),
+  // CAPTCHA adaptativo: solo se exige tras varios intentos fallidos
+  desafio_id: z.string().max(64).optional(),
+  desafio_respuesta: z.string().max(10).optional(),
 });
 
 const mfaSchema = z.object({
@@ -102,6 +108,33 @@ const codigoSchema = z.string().regex(/^\d{6}$/, 'El código tiene 6 dígitos');
 async function enviarCodigoVerificacion(usuarioId: string, correo: string) {
   const codigo = await emitirCodigo(usuarioId, 'verificar_correo');
   if (codigo) await enviarCodigo(usuarioId, correo, 'verificar_correo', codigo);
+}
+
+// Teléfono del perfil de paciente. pacientes tiene RLS: se lee con el claim del propio paciente.
+async function contactoPaciente(usuarioId: string) {
+  const pacienteId = (await pool.query('SELECT paciente_de_usuario($1) AS id', [usuarioId])).rows[0]?.id;
+  if (!pacienteId) return null;
+  return conClaims({ rol: 'paciente', paciente_id: pacienteId, usuario_id: usuarioId }, async (db) => (await db.query(
+    'SELECT id, telefono, telefono_verificado FROM pacientes WHERE id = $1', [pacienteId])).rows[0] ?? null);
+}
+
+// S02: el teléfono también se verifica con un código de un solo uso, enviado por SMS
+async function enviarCodigoTelefono(usuarioId: string, telefono: string) {
+  const codigo = await emitirCodigo(usuarioId, 'verificar_telefono');
+  if (codigo) await enviarCodigoSms(usuarioId, telefono, codigo);
+}
+
+// Envía los códigos que falten y describe qué queda por verificar
+async function pedirVerificacion(u: { id: string; email: string; correo_verificado: boolean }) {
+  const contacto = await contactoPaciente(u.id);
+  const pendientes = { correo: !u.correo_verificado, telefono: !!contacto && !contacto.telefono_verificado };
+  if (pendientes.correo) await enviarCodigoVerificacion(u.id, u.email);
+  if (pendientes.telefono) await enviarCodigoTelefono(u.id, contacto!.telefono);
+  const destinos = [
+    pendientes.correo ? enmascararCorreo(u.email) : null,
+    pendientes.telefono ? `el teléfono ${enmascararTelefono(contacto!.telefono)}` : null,
+  ].filter(Boolean).join(' y ');
+  return { pendientes, destinos };
 }
 
 // Hash ficticio: si el correo no existe se verifica igual, para no revelar por tiempo qué cuentas existen
@@ -191,6 +224,13 @@ router.post('/registro', authLimiter, ah(async (req, res) => {
   }
   const d = parsed.data;
 
+  // R15, V17: contraseñas contrastadas con listas filtradas
+  const debil = motivoContrasenaDebil(d.password, [d.email.split('@')[0], d.nombres, d.apellidos, d.identificacion])
+    ?? (await filtradaEnHibp(d.password) ? 'Esa contraseña apareció en filtraciones de datos. Elija otra.' : null);
+  if (debil) {
+    return res.status(400).json({ error: debil, detalles: { fieldErrors: { password: [debil] } } });
+  }
+
   const existente = await pool.query('SELECT 1 FROM usuarios WHERE email = $1', [d.email]);
   if (existente.rows.length > 0) {
     return res.status(409).json({
@@ -237,10 +277,12 @@ router.post('/registro', authLimiter, ah(async (req, res) => {
     throw err;
   }
 
-  // S02: el correo se verifica con un código de un solo uso antes del primer inicio de sesión
+  // S02: correo y teléfono se verifican con un código de un solo uso antes del primer inicio de sesión
   await enviarCodigoVerificacion(usuarioId, d.email);
+  await enviarCodigoTelefono(usuarioId, d.telefono);
   res.status(201).json({
-    mensaje: `Cuenta creada. Enviamos un código a ${enmascararCorreo(d.email)} para verificar su correo.`,
+    mensaje: `Cuenta creada. Enviamos un código a ${enmascararCorreo(d.email)} y otro por SMS al ` +
+      `${enmascararTelefono(d.telefono)} para verificar sus datos de contacto.`,
     verificar_correo: true,
   });
 }));
@@ -254,8 +296,13 @@ router.post('/login', authLimiter, ah(async (req, res) => {
   const { email, password } = parsed.data;
 
   // Bloqueo por cuenta (no solo por IP): frena el relleno de credenciales distribuido (R15)
-  if (await intentosFallidos(email) >= MAX_INTENTOS_LOGIN) {
+  const fallidos = await intentosFallidos(email);
+  if (fallidos >= MAX_INTENTOS_LOGIN) {
     return res.status(429).json({ error: 'Cuenta bloqueada temporalmente por intentos fallidos. Intente en 15 minutos.' });
+  }
+  // CAPTCHA adaptativo (R11, R15): tras varios fallos cada intento exige resolver un desafío
+  if (fallidos >= UMBRAL_CAPTCHA && !(await resolverDesafio(parsed.data.desafio_id, parsed.data.desafio_respuesta))) {
+    return res.status(400).json({ error: 'Resuelva la verificación para continuar', captcha_requerido: true });
   }
 
   const u = (await pool.query(`${SELECT_USUARIO} WHERE u.email = $1`, [email])).rows[0];
@@ -264,17 +311,19 @@ router.post('/login', authLimiter, ah(async (req, res) => {
     : (await argon2.verify(await hashFicticio, password), false);
 
   if (!u || !valido || !u.activo) {
-    await registrarIntentoFallido(email);
+    const n = await registrarIntentoFallido(email);
     if (u) await auditar(pool, u.id, 'LOGIN', 'usuario', u.id, req.ip, { motivo: valido ? 'cuenta_inactiva' : 'contrasena' }, 'fallo');
-    return res.status(401).json({ error: 'Credenciales inválidas' });
+    return res.status(401).json({ error: 'Credenciales inválidas', captcha_requerido: n >= UMBRAL_CAPTCHA });
   }
 
-  if (u.rol === 'paciente' && !u.correo_verificado) {
-    await enviarCodigoVerificacion(u.id, u.email);
-    return res.status(403).json({
-      error: `Debe verificar su correo. Enviamos un código a ${enmascararCorreo(u.email)}.`,
-      verificar_correo: true,
-    });
+  if (u.rol === 'paciente') {
+    const { pendientes, destinos } = await pedirVerificacion(u);
+    if (pendientes.correo || pendientes.telefono) {
+      return res.status(403).json({
+        error: `Debe verificar sus datos de contacto. Enviamos un código a ${destinos}.`,
+        verificar_correo: true, pendientes,
+      });
+    }
   }
 
   // Segundo factor obligatorio para el personal (S12, R15): TOTP con app autenticadora
@@ -295,6 +344,11 @@ router.post('/login', authLimiter, ah(async (req, res) => {
   }
 
   await emitirSesion(req, res, u, 'contrasena');
+}));
+
+// GET /auth/desafio: desafío de un solo uso para el CAPTCHA adaptativo
+router.get('/desafio', authLimiter, ah(async (_req, res) => {
+  res.json(await crearDesafio());
 }));
 
 // POST /auth/mfa: segundo factor (verificación o fin del enrolamiento)
@@ -336,29 +390,54 @@ router.post('/mfa', authLimiter, ah(async (req, res) => {
   await emitirSesion(req, res, u, 'contrasena+totp');
 }));
 
-// POST /auth/verificar-correo: confirma el correo con el código enviado al registrarse
+// POST /auth/verificar-correo: confirma el correo y el teléfono con los códigos enviados (S02).
+// Cada código se valida por separado: uno correcto queda verificado aunque el otro falle.
 router.post('/verificar-correo', authLimiter, ah(async (req, res) => {
-  const parsed = z.object({ email: emailSchema, codigo: codigoSchema }).safeParse(req.body);
-  if (!parsed.success) throw new HttpError(400, 'Código incorrecto o vencido');
-  const u = (await pool.query(
-    `${SELECT_USUARIO} WHERE u.email = $1`, [parsed.data.email])).rows[0];
+  const parsed = z.object({
+    email: emailSchema,
+    codigo: codigoSchema.optional(),
+    codigo_telefono: codigoSchema.optional(),
+  }).safeParse(req.body);
+  const errorGenerico = new HttpError(400, 'Código incorrecto o vencido');
+  if (!parsed.success || (!parsed.data.codigo && !parsed.data.codigo_telefono)) throw errorGenerico;
+  const u = (await pool.query(`${SELECT_USUARIO} WHERE u.email = $1`, [parsed.data.email])).rows[0];
   // Mismo mensaje si la cuenta no existe: no revela qué correos están registrados
-  if (!u || u.correo_verificado || !(await consumirCodigo(u.id, 'verificar_correo', parsed.data.codigo))) {
-    throw new HttpError(400, 'Código incorrecto o vencido');
+  if (!u || u.rol !== 'paciente') throw errorGenerico;
+
+  let correo = u.correo_verificado as boolean;
+  if (!correo && parsed.data.codigo && await consumirCodigo(u.id, 'verificar_correo', parsed.data.codigo)) {
+    await pool.query('UPDATE usuarios SET correo_verificado = true, actualizado_en = now() WHERE id = $1', [u.id]);
+    await auditar(pool, u.id, 'VERIFICAR_CORREO', 'usuario', u.id, req.ip);
+    correo = true;
   }
-  await pool.query('UPDATE usuarios SET correo_verificado = true, actualizado_en = now() WHERE id = $1', [u.id]);
-  await auditar(pool, u.id, 'VERIFICAR_CORREO', 'usuario', u.id, req.ip);
-  res.json({ mensaje: 'Correo verificado. Ya puede iniciar sesión.' });
+
+  const contacto = await contactoPaciente(u.id);
+  let telefono = !contacto || contacto.telefono_verificado as boolean;
+  if (!telefono && parsed.data.codigo_telefono
+      && await consumirCodigo(u.id, 'verificar_telefono', parsed.data.codigo_telefono)) {
+    await conClaims({ rol: 'paciente', paciente_id: contacto!.id, usuario_id: u.id }, async (db) => {
+      await db.query('UPDATE pacientes SET telefono_verificado = true, actualizado_en = now() WHERE id = $1', [contacto!.id]);
+      await auditar(db, u.id, 'VERIFICAR_TELEFONO', 'paciente', contacto!.id, req.ip);
+    });
+    telefono = true;
+  }
+
+  if (correo && telefono) return res.json({ mensaje: 'Datos de contacto verificados. Ya puede iniciar sesión.' });
+  res.status(400).json({
+    error: !correo && !telefono ? 'Códigos incorrectos o vencidos'
+      : !correo ? 'El código del correo es incorrecto o venció' : 'El código del SMS es incorrecto o venció',
+    pendientes: { correo: !correo, telefono: !telefono },
+  });
 }));
 
-// POST /auth/reenviar-codigo: nuevo código de verificación del correo (respuesta igual exista o no la cuenta)
+// POST /auth/reenviar-codigo: nuevos códigos de verificación (respuesta igual exista o no la cuenta)
 router.post('/reenviar-codigo', authLimiter, ah(async (req, res) => {
   const parsed = z.object({ email: emailSchema }).safeParse(req.body);
   if (parsed.success) {
     const u = (await pool.query(`${SELECT_USUARIO} WHERE u.email = $1`, [parsed.data.email])).rows[0];
-    if (u && u.rol === 'paciente' && !u.correo_verificado) await enviarCodigoVerificacion(u.id, u.email);
+    if (u && u.rol === 'paciente') await pedirVerificacion(u);
   }
-  res.json({ mensaje: 'Si la cuenta existe y no está verificada, enviamos un nuevo código.' });
+  res.json({ mensaje: 'Si la cuenta existe y falta verificarla, enviamos nuevos códigos (espere 1 minuto entre envíos).' });
 }));
 
 // POST /auth/codigo: código por correo antes de una acción sensible del paciente (S10)
@@ -449,7 +528,8 @@ router.get('/perfil', authenticate, ah(async (req, res) => {
 
     // RLS: el paciente solo ve su propio registro
     const p = (await db.query(
-      `SELECT nombres, apellidos, tipo_identificacion, correo, telefono, aseguradora, mostrar_especialidad_recordatorio,
+      `SELECT nombres, apellidos, tipo_identificacion, correo, telefono, telefono_verificado, aseguradora,
+              mostrar_especialidad_recordatorio,
               numero_poliza_cifrada IS NOT NULL AS tiene_poliza
        FROM pacientes WHERE id = $1`,
       [user.paciente_id]
@@ -524,14 +604,18 @@ router.post('/baja', authenticate, authorize('paciente'), ah(async (req, res) =>
   await exigirCodigo(user.sub, 'baja', req.body?.codigo);
 
   const canceladas = await conClaims(claimsDe(user), async (db) => {
+    const confirmadas = (await db.query(
+      `SELECT id FROM citas WHERE estado = 'confirmada' AND fecha_hora > now()`)).rows.map((r) => r.id as string);
     const citas = (await db.query(
       `UPDATE citas SET estado = 'cancelada', retencion_expira_en = NULL,
               estado_pago = CASE WHEN estado_pago = 'pagado' THEN 'reembolsado'
                                  WHEN estado_pago = 'pendiente' THEN NULL ELSE estado_pago END,
               actualizado_en = now()
-       WHERE estado IN ('retenida', 'pendiente_pago', 'confirmada') AND fecha_hora > now()
+       WHERE estado IN ('retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago', 'confirmada')
+         AND fecha_hora > now()
        RETURNING id`
     )).rows.map((r) => r.id as string);
+    for (const id of confirmadas) await encolarHce(db, id, 'CITA_CANCELADA');
     if (citas.length > 0) {
       await db.query(`UPDATE pagos SET estado = 'reembolsado', actualizado_en = now()
                       WHERE cita_id = ANY($1) AND estado = 'pagado'`, [citas]);

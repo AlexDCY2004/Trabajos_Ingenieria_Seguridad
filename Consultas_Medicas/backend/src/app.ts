@@ -18,6 +18,9 @@ import pagosRoutes from './modules/pagos/routes';
 import auditoriaRoutes from './modules/auditoria/routes';
 import dependientesRoutes from './modules/dependientes/routes';
 import adminRoutes from './modules/admin/routes';
+import seguridadRoutes from './modules/seguridad/routes';
+import soporteRoutes from './modules/soporte/routes';
+import derechosRoutes from './modules/derechos/routes';
 import { iniciarTareasProgramadas } from './modules/notificaciones/programador';
 
 const app = express();
@@ -52,6 +55,9 @@ app.use('/pagos', pagosRoutes);
 app.use('/auditoria', auditoriaRoutes);
 app.use('/dependientes', dependientesRoutes);
 app.use('/admin', adminRoutes);
+app.use('/seguridad', seguridadRoutes);
+app.use('/soporte', soporteRoutes);
+app.use('/derechos', derechosRoutes);
 
 // --- 404 ---
 app.use((_req, res) => {

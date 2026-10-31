@@ -20,6 +20,10 @@ const pages = {
   Conciliacion: lazy(() => import('./pages/Conciliacion')),
   AdminCatalogo: lazy(() => import('./pages/AdminCatalogo')),
   Conservacion: lazy(() => import('./pages/Conservacion')),
+  Accesos: lazy(() => import('./pages/Accesos')),
+  Incidentes: lazy(() => import('./pages/Incidentes')),
+  SolicitudesDerechos: lazy(() => import('./pages/SolicitudesDerechos')),
+  Soporte: lazy(() => import('./pages/Soporte')),
 };
 
 const Cargando = () => (
@@ -95,6 +99,10 @@ export default function App() {
             <Route path="conciliacion" element={<Solo roles={['contabilidad']}><pages.Conciliacion /></Solo>} />
             <Route path="admin/catalogo" element={<Solo roles={['admin']}><pages.AdminCatalogo /></Solo>} />
             <Route path="conservacion" element={<Solo roles={['dpd']}><pages.Conservacion /></Solo>} />
+            <Route path="accesos" element={<Solo roles={['oficial_seguridad']}><pages.Accesos /></Solo>} />
+            <Route path="incidentes" element={<Solo roles={['oficial_seguridad', 'dpd']}><pages.Incidentes /></Solo>} />
+            <Route path="solicitudes-derechos" element={<Solo roles={['dpd']}><pages.SolicitudesDerechos /></Solo>} />
+            <Route path="soporte" element={<Solo roles={['soporte']}><pages.Soporte /></Solo>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

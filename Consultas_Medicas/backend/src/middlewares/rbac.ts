@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AuthRequest } from './auth';
 
 export type Role = 'paciente' | 'recepcion' | 'medico' | 'aseguradora' | 'admin' | 'oficial_seguridad' | 'dpd'
-  | 'contabilidad';
+  | 'contabilidad' | 'soporte';
 
 export function authorize(...allowedRoles: Role[]) {
   return (req: Request, res: Response, next: NextFunction) => {

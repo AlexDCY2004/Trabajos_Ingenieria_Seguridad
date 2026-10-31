@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import {
   Shield, LogOut, LogIn, User, CalendarDays, ShieldAlert, Building, ClipboardList, Users, UserPlus, FileCheck,
-  Calculator, Settings, Archive,
+  Calculator, Settings, Archive, Siren, KeyRound, Scale, Server,
 } from 'lucide-react';
 import { useSesion } from '../sesion';
 
@@ -16,9 +16,13 @@ const menu = [
   { path: '/conciliacion', label: 'Conciliación', icon: Calculator, roles: ['contabilidad'] },
   { path: '/admin/catalogo', label: 'Catálogo', icon: Settings, roles: ['admin'] },
   { path: '/auditoria', label: 'Bitácora', icon: ShieldAlert, roles: ['oficial_seguridad', 'dpd'] },
+  { path: '/accesos', label: 'Accesos y alertas', icon: KeyRound, roles: ['oficial_seguridad'] },
+  { path: '/incidentes', label: 'Incidentes', icon: Siren, roles: ['oficial_seguridad', 'dpd'] },
+  { path: '/solicitudes-derechos', label: 'Derechos', icon: Scale, roles: ['dpd'] },
   { path: '/conservacion', label: 'Conservación', icon: Archive, roles: ['dpd'] },
+  { path: '/soporte', label: 'Operación', icon: Server, roles: ['soporte'] },
   { path: '/perfil', label: 'Mi perfil', icon: User,
-    roles: ['paciente', 'recepcion', 'medico', 'aseguradora', 'oficial_seguridad', 'dpd', 'admin', 'contabilidad'] },
+    roles: ['paciente', 'recepcion', 'medico', 'aseguradora', 'oficial_seguridad', 'dpd', 'admin', 'contabilidad', 'soporte'] },
 ];
 
 export default function Layout() {
@@ -35,7 +39,7 @@ export default function Layout() {
               <Shield className="h-6 w-6 text-blue-600" />
               <span className="font-bold text-lg tracking-tight">Portal de Citas Seguro</span>
             </div>
-            <div className="hidden md:flex items-center space-x-8">
+            <div className="hidden md:flex items-center space-x-6">
               {items.map((m) => {
                 const Icon = m.icon;
                 return (

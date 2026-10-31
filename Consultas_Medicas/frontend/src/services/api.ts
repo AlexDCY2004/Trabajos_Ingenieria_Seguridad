@@ -74,12 +74,17 @@ export default api;
 // ---------- Servicios ----------
 
 export const authService = {
-  login: (email: string, password: string) => api.post('/auth/login', { email, password }),
+  login: (email: string, password: string, desafio?: { id: string; respuesta: string }) =>
+    api.post('/auth/login', { email, password, desafio_id: desafio?.id, desafio_respuesta: desafio?.respuesta }),
+  // CAPTCHA adaptativo tras varios intentos fallidos
+  desafio: () => api.get('/auth/desafio'),
   mfa: (mfa_token: string, codigo: string) => api.post('/auth/mfa', { mfa_token, codigo }),
   registro: (data: unknown) => api.post('/auth/registro', data),
   logout: () => api.post('/auth/logout'),
   perfil: () => api.get('/auth/perfil'),
-  verificarCorreo: (email: string, codigo: string) => api.post('/auth/verificar-correo', { email, codigo }),
+  // Correo y teléfono se verifican con códigos de un solo uso (S02)
+  verificarContacto: (email: string, codigo?: string, codigo_telefono?: string) =>
+    api.post('/auth/verificar-correo', { email, codigo: codigo || undefined, codigo_telefono: codigo_telefono || undefined }),
   reenviarCodigo: (email: string) => api.post('/auth/reenviar-codigo', { email }),
   // Código por correo antes de una acción sensible (S10)
   solicitarCodigo: (accion: 'dependiente' | 'poliza' | 'baja') => api.post('/auth/codigo', { accion }),
@@ -93,6 +98,9 @@ export const authService = {
 
 export const agendaService = {
   catalogo: (params?: Record<string, string>) => api.get('/agenda/catalogo', { params }),
+  sedes: () => api.get('/agenda/sedes'),
+  cita: (id: string) => api.get(`/agenda/cita/${id}`),
+  llegada: (id: string) => api.post(`/agenda/cita/${id}/llegada`),
   horarios: (profesionalId: string) => api.get(`/agenda/profesionales/${profesionalId}/horarios`),
   reservar: (data: { profesional_id: string; fecha_hora: string; dependiente_id?: string }) =>
     api.post('/agenda/reservar', data),
@@ -110,6 +118,8 @@ export const coberturaService = {
   registrarPoliza: (data: unknown) => api.put('/cobertura/poliza', data),
   verificar: (cita_id: string) => api.post('/cobertura/verificar', { cita_id }),
   misAfiliados: () => api.get('/cobertura/mis-afiliados'),
+  responder: (id: string, data: { decision: 'autorizar' } | { decision: 'rechazar'; motivo: string }) =>
+    api.post(`/cobertura/solicitudes/${id}/responder`, data),
 };
 
 export const pagosService = {
@@ -119,6 +129,9 @@ export const pagosService = {
   simular: (referencia: string, resultado: 'aprobado' | 'rechazado') =>
     api.post('/pagos/simulador', { referencia, resultado }),
   conciliacion: (desde: string, hasta: string) => api.get('/pagos/conciliacion', { params: { desde, hasta } }),
+  // Cobro presencial en caja (UC14): efectivo, o datáfono con referencia y 4 últimos dígitos del comprobante
+  cobrarEnCaja: (citaId: string, data: { medio: 'efectivo' } | { medio: 'datafono'; referencia: string; cuatro_ultimos: string }) =>
+    api.post(`/pagos/caja/${citaId}`, data),
 };
 
 export const dependientesService = {
@@ -132,7 +145,8 @@ export const dependientesService = {
 
 export const adminService = {
   sedes: () => api.get('/admin/sedes'),
-  crearSede: (data: { nombre: string; direccion: string }) => api.post('/admin/sedes', data),
+  crearSede: (data: { nombre: string; direccion: string; latitud?: number | null; longitud?: number | null }) =>
+    api.post('/admin/sedes', data),
   editarSede: (id: string, data: Record<string, unknown>) => api.patch(`/admin/sedes/${id}`, data),
   profesionales: () => api.get('/admin/profesionales'),
   crearProfesional: (data: Record<string, string>) => api.post('/admin/profesionales', data),
@@ -144,6 +158,35 @@ export const auditoriaService = {
   verificarCadena: () => api.get('/auditoria/verificar-cadena'),
   plazosConservacion: () => api.get('/auditoria/conservacion'),
   aplicarConservacion: () => api.post('/auditoria/conservacion'),
+};
+
+export const seguridadService = {
+  incidentes: () => api.get('/seguridad/incidentes'),
+  crearIncidente: (data: unknown) => api.post('/seguridad/incidentes', data),
+  actualizarIncidente: (id: string, data: Record<string, unknown>) => api.patch(`/seguridad/incidentes/${id}`, data),
+  alertas: () => api.get('/seguridad/alertas'),
+  accesos: () => api.get('/seguridad/accesos'),
+  gestionarAcceso: (id: string, accion: 'desactivar' | 'reactivar' | 'restablecer_mfa') =>
+    api.post(`/seguridad/accesos/${id}`, { accion }),
+  emergencias: () => api.get('/seguridad/emergencias'),
+  decidirEmergencia: (id: string, decision: 'aprobar' | 'rechazar') =>
+    api.post(`/seguridad/emergencias/${id}/decidir`, { decision }),
+};
+
+export const soporteService = {
+  estado: () => api.get('/soporte/estado'),
+  emergencias: () => api.get('/soporte/emergencias'),
+  solicitar: (sede_id: string, motivo: string) => api.post('/soporte/emergencias', { sede_id, motivo }),
+  cerrar: (id: string) => api.post(`/soporte/emergencias/${id}/cerrar`),
+  agenda: (id: string) => api.get(`/soporte/emergencias/${id}/agenda`),
+};
+
+export const derechosService = {
+  mias: () => api.get('/derechos'),
+  presentar: (tipo: string, detalle: string) => api.post('/derechos', { tipo, detalle }),
+  todas: () => api.get('/derechos/todas'),
+  responder: (id: string, estado: 'atendida' | 'rechazada', respuesta: string) =>
+    api.post(`/derechos/${id}/responder`, { estado, respuesta }),
 };
 
 // Primer mensaje de validación de un campo, o el error general

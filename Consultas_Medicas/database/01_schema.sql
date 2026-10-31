@@ -40,6 +40,7 @@ CREATE TABLE pacientes (
     fecha_nacimiento DATE,
     correo VARCHAR(255) NOT NULL,
     telefono VARCHAR(50) NOT NULL,
+    telefono_verificado BOOLEAN NOT NULL DEFAULT FALSE, -- S02: verificado con código por SMS
     aseguradora VARCHAR(100),
     numero_poliza_cifrada TEXT, -- AES-256 por campo (pgcrypto / KMS)
     titular VARCHAR(100),
@@ -78,6 +79,9 @@ CREATE TABLE sedes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     nombre VARCHAR(100) NOT NULL,
     direccion TEXT,
+    -- Coordenadas públicas de la sede: "cerca de mí" se calcula en el dispositivo (S05)
+    latitud NUMERIC(9,6),
+    longitud NUMERIC(9,6),
     activo BOOLEAN NOT NULL DEFAULT TRUE,
     creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -102,7 +106,7 @@ CREATE TABLE citas (
     sede_id UUID REFERENCES sedes(id),
     especialidad VARCHAR(100) NOT NULL,
     fecha_hora TIMESTAMPTZ NOT NULL,
-    estado VARCHAR(30) NOT NULL DEFAULT 'disponible', -- disponible, retenida, confirmada, cancelada, atendida, ausente
+    estado VARCHAR(30) NOT NULL DEFAULT 'retenida', -- Figura 11 (ver COMMENT en 05_rol_aplicacion.sql)
     retencion_expira_en TIMESTAMPTZ, -- retención de 10 minutos
     codigo_cita VARCHAR(20) UNIQUE,
     resultado_cobertura JSONB, -- solo resultado: cobertura, copago, código de autorización
@@ -111,6 +115,8 @@ CREATE TABLE citas (
     monto_copago NUMERIC(10,2),
     referencia_pasarela VARCHAR(100),
     veces_reprogramada INT NOT NULL DEFAULT 0,
+    llegada_en TIMESTAMPTZ,                  -- UC12: recepción confirma la llegada
+    llegada_registrada_por UUID REFERENCES usuarios(id),
     creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
     actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -124,6 +130,8 @@ CREATE TABLE pagos (
     estado VARCHAR(50) NOT NULL DEFAULT 'pendiente',
     referencia VARCHAR(100),
     cuatro_ultimos VARCHAR(4),
+    medio VARCHAR(20) NOT NULL DEFAULT 'pasarela', -- pasarela (en línea) o caja (UC14, cobro manual)
+    registrado_por UUID REFERENCES usuarios(id),   -- cajero que registró el cobro manual
     creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
     actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -179,6 +187,69 @@ CREATE TABLE notificaciones (
 -- Un solo recordatorio por cita aunque el proceso corra en varias réplicas
 CREATE UNIQUE INDEX idx_notificaciones_recordatorio ON notificaciones(cita_id, plantilla)
     WHERE plantilla = 'recordatorio_24h';
+
+-- Tabla: envíos a la HCE del consultorio (sección 3.2, paso 9). Solo identificadores y hora, nunca
+-- datos clínicos. Bandeja de salida con reintento asíncrono: la cita no depende de la HCE.
+CREATE TABLE hce_envios (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cita_id UUID NOT NULL REFERENCES citas(id),
+    paciente_id UUID,
+    fecha_hora TIMESTAMPTZ NOT NULL,
+    evento VARCHAR(30) NOT NULL,           -- CITA_CONFIRMADA, CITA_REPROGRAMADA, CITA_CANCELADA
+    estado VARCHAR(20) NOT NULL DEFAULT 'pendiente', -- pendiente, enviado, error
+    intentos INT NOT NULL DEFAULT 0,
+    ultimo_error VARCHAR(200),
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+    enviado_en TIMESTAMPTZ
+);
+CREATE INDEX idx_hce_envios_pendientes ON hce_envios(estado) WHERE estado <> 'enviado';
+
+-- Tabla: incidentes de seguridad (UC21, LOPDP art. 43: notificación de vulneraciones)
+CREATE TABLE incidentes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    titulo VARCHAR(150) NOT NULL,
+    descripcion TEXT NOT NULL,
+    severidad VARCHAR(10) NOT NULL,        -- baja, media, alta, critica (escala de la sección 4.1)
+    afecta_datos_personales BOOLEAN NOT NULL DEFAULT FALSE,
+    categorias_datos VARCHAR(200),
+    titulares_afectados INT,
+    detectado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+    estado VARCHAR(20) NOT NULL DEFAULT 'abierto', -- abierto, contenido, cerrado
+    medidas TEXT,
+    notificado_autoridad_en TIMESTAMPTZ,
+    notificado_titulares_en TIMESTAMPTZ,
+    creado_por UUID REFERENCES usuarios(id),
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Tabla: solicitudes de derechos del titular (UC09; el DPD las atiende, sección 3.1)
+CREATE TABLE solicitudes_derechos (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    paciente_id UUID NOT NULL REFERENCES pacientes(id),
+    tipo VARCHAR(20) NOT NULL,             -- rectificacion, oposicion, suspension, acceso, eliminacion, portabilidad
+    detalle VARCHAR(1000) NOT NULL,
+    estado VARCHAR(20) NOT NULL DEFAULT 'recibida', -- recibida, atendida, rechazada
+    respuesta VARCHAR(1000),
+    respondida_por UUID REFERENCES usuarios(id),
+    plazo_vence_en TIMESTAMPTZ NOT NULL,
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+    respondida_en TIMESTAMPTZ
+);
+
+-- Tabla: acceso de emergencia del soporte técnico (break-glass, sección 3.1). Aprobación de una
+-- segunda persona (oficial de seguridad), temporal y auditado.
+CREATE TABLE accesos_emergencia (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    solicitante_id UUID NOT NULL REFERENCES usuarios(id),
+    sede_id UUID NOT NULL REFERENCES sedes(id),
+    motivo VARCHAR(500) NOT NULL,
+    estado VARCHAR(20) NOT NULL DEFAULT 'pendiente', -- pendiente, aprobado, rechazado, cerrado
+    aprobado_por UUID REFERENCES usuarios(id),
+    aprobado_en TIMESTAMPTZ,
+    expira_en TIMESTAMPTZ,
+    creado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 -- Tabla: tokens_revocados (lista de revocación, persistida también en Redis)
 CREATE TABLE tokens_revocados (

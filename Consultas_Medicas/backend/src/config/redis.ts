@@ -64,7 +64,7 @@ export async function limpiarIntentos(cuenta: string) {
 // Verificación del correo y acciones sensibles. Solo se guarda el hash del código, vence en 15 minutos
 // y se invalida tras 5 intentos fallidos. Entre dos envíos deben pasar 60 segundos.
 
-export type PropositoCodigo = 'verificar_correo' | 'dependiente' | 'poliza' | 'baja';
+export type PropositoCodigo = 'verificar_correo' | 'verificar_telefono' | 'dependiente' | 'poliza' | 'baja';
 const MINUTOS_CODIGO = 15;
 const MAX_INTENTOS_CODIGO = 5;
 const hashCodigo = (codigo: string) => crypto.createHash('sha256').update(codigo).digest('hex');
@@ -94,6 +94,27 @@ export async function consumirCodigo(usuarioId: string, proposito: PropositoCodi
     await redisClient.set(clave, JSON.stringify({ h, intentos: intentos + 1 }), { KEEPTTL: true });
   }
   return false;
+}
+
+// ---------- CAPTCHA adaptativo (R11, R15, V17) ----------
+// Tras varios intentos fallidos el inicio de sesión exige resolver un desafío de un solo uso.
+// En producción lo reemplaza el CAPTCHA del WAF o de un proveedor; la lógica de cuándo exigirlo es la misma.
+
+export const UMBRAL_CAPTCHA = 3;
+
+export async function crearDesafio(): Promise<{ id: string; pregunta: string }> {
+  const a = crypto.randomInt(2, 20);
+  const b = crypto.randomInt(2, 10);
+  const id = crypto.randomUUID();
+  await redisClient.set(`captcha:${id}`, String(a + b), { EX: 5 * 60 });
+  return { id, pregunta: `¿Cuánto es ${a} + ${b}?` };
+}
+
+// Se consume siempre (acierte o no): cada desafío sirve para un solo intento
+export async function resolverDesafio(id: unknown, respuesta: unknown): Promise<boolean> {
+  if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) return false;
+  const esperado = await redisClient.getDel(`captcha:${id}`);
+  return esperado !== null && String(respuesta ?? '').trim() === esperado;
 }
 
 // ---------- Anti-replay del código TOTP ----------

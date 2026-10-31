@@ -49,9 +49,12 @@ function fecha(diasDesdeHoy: number, hora: number): string {
 // ---------- Catálogo ----------
 
 const SEDES = [
-  { id: '5ede0000-0000-4000-8000-000000000001', nombre: 'Sede Quito Norte', direccion: 'Av. Amazonas N34-120 y Av. República, Quito' },
-  { id: '5ede0000-0000-4000-8000-000000000002', nombre: 'Sede Guayaquil Centro', direccion: 'Av. 9 de Octubre 1200 y Pedro Moncayo, Guayaquil' },
-  { id: '5ede0000-0000-4000-8000-000000000003', nombre: 'Sede Cuenca', direccion: 'Av. Solano 3-45 y Av. 12 de Abril, Cuenca' },
+  { id: '5ede0000-0000-4000-8000-000000000001', nombre: 'Sede Quito Norte', direccion: 'Av. Amazonas N34-120 y Av. República, Quito',
+    latitud: -0.180653, longitud: -78.484040 },
+  { id: '5ede0000-0000-4000-8000-000000000002', nombre: 'Sede Guayaquil Centro', direccion: 'Av. 9 de Octubre 1200 y Pedro Moncayo, Guayaquil',
+    latitud: -2.189412, longitud: -79.889066 },
+  { id: '5ede0000-0000-4000-8000-000000000003', nombre: 'Sede Cuenca', direccion: 'Av. Solano 3-45 y Av. 12 de Abril, Cuenca',
+    latitud: -2.906960, longitud: -79.004230 },
 ];
 
 const PROFESIONALES = [
@@ -78,6 +81,7 @@ const PERSONAL: { email: string; rol: string; sede?: number; profesional?: numbe
   { email: 'medico@citas.com', rol: 'medico', profesional: 1 },
   { email: 'aseguradora@citas.com', rol: 'aseguradora', aseguradora: 'Salud Andina S.A.' },
   { email: 'contabilidad@citas.com', rol: 'contabilidad' },
+  { email: 'soporte@citas.com', rol: 'soporte' },
 ];
 
 // ---------- Pacientes ----------
@@ -187,10 +191,13 @@ async function main() {
 
     for (const s of SEDES) {
       const r = await client.query(
-        `INSERT INTO sedes (id, nombre, direccion) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
-        [s.id, s.nombre, s.direccion]
+        `INSERT INTO sedes (id, nombre, direccion, latitud, longitud) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+        [s.id, s.nombre, s.direccion, s.latitud, s.longitud]
       );
       resumen.sedes += r.rowCount ?? 0;
+      // Bases creadas antes de que existieran las coordenadas
+      await client.query('UPDATE sedes SET latitud = $2, longitud = $3 WHERE id = $1 AND latitud IS NULL',
+        [s.id, s.latitud, s.longitud]);
     }
 
     for (const p of PROFESIONALES) {
@@ -221,8 +228,8 @@ async function main() {
 
       const r = await client.query(
         `INSERT INTO pacientes (usuario_id, nombres, apellidos, tipo_identificacion, identificacion_hash,
-                                fecha_nacimiento, correo, telefono, aseguradora, numero_poliza_cifrada)
-         VALUES ($1, $2, $3, 'cedula', $4, $5, $6, $7, $8,
+                                fecha_nacimiento, correo, telefono, telefono_verificado, aseguradora, numero_poliza_cifrada)
+         VALUES ($1, $2, $3, 'cedula', $4, $5, $6, $7, true, $8,
                  CASE WHEN $9::text IS NULL THEN NULL ELSE encode(pgp_sym_encrypt($9::text, $10), 'base64') END)
          RETURNING id`,
         [usuarioId, p.nombres, p.apellidos, hmacIdentificacion(cedula(p.base9)), p.nacimiento, p.email,

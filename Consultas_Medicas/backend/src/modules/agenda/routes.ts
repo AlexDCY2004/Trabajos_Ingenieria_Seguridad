@@ -6,8 +6,11 @@ import { authenticate, AuthRequest } from '../../middlewares/auth';
 import { authorize } from '../../middlewares/rbac';
 import { reservaLimiter } from '../../middlewares/rate-limit';
 import { ah, HttpError, uuidSchema, exigirUuid } from '../../utils/http';
-import { AGENDA, generarHorarios, esHorarioValido, SQL_OCUPA_HORARIO } from './horarios';
+import {
+  AGENDA, generarHorarios, esHorarioValido, SQL_OCUPA_HORARIO, SQL_EN_PROCESO, ESTADOS_CANCELABLES,
+} from './horarios';
 import { notificarCita } from '../notificaciones/servicio';
+import { encolarHce } from '../hce/servicio';
 
 const router = Router();
 
@@ -30,11 +33,19 @@ const PROFESIONAL_ACTIVO = `
 
 // ============ Catálogo público (S01: buscar sin cuenta; no se envían datos personales) ============
 
+// GET /agenda/sedes: sedes activas con su ubicación pública. "Cerca de mí" ordena por distancia en el
+// dispositivo: la ubicación del usuario nunca se envía al servidor ni se guarda (S05).
+router.get('/sedes', ah(async (_req, res) => {
+  res.json((await pool.query(
+    'SELECT id, nombre, direccion, latitud, longitud FROM sedes WHERE activo = true ORDER BY nombre')).rows);
+}));
+
 // GET /agenda/catalogo
 router.get('/catalogo', ah(async (req, res) => {
   const { especialidad, sede_id } = req.query as { especialidad?: string; sede_id?: string };
   let query = `
-    SELECT pr.id, pr.nombres, pr.apellidos, pr.especialidad, s.id AS sede_id, s.nombre AS sede, s.direccion
+    SELECT pr.id, pr.nombres, pr.apellidos, pr.especialidad, s.id AS sede_id, s.nombre AS sede, s.direccion,
+           s.latitud, s.longitud
     FROM profesionales pr
     JOIN sedes s ON s.id = pr.sede_id
     WHERE pr.activo = true AND s.activo = true`;
@@ -113,7 +124,7 @@ router.post('/reservar', authenticate, authorize('paciente'), reservaLimiter, ah
     // RLS: estas consultas solo cuentan las citas del propio paciente
     const propias = (await db.query(
       `SELECT count(*) FILTER (WHERE c.fecha_hora = $1 AND ${SQL_OCUPA_HORARIO}) AS choque,
-              count(*) FILTER (WHERE c.estado IN ('retenida', 'pendiente_pago') AND c.retencion_expira_en > now()) AS en_proceso,
+              count(*) FILTER (WHERE ${SQL_EN_PROCESO}) AS en_proceso,
               count(*) FILTER (WHERE c.estado = 'confirmada' AND c.fecha_hora > now()) AS futuras
        FROM citas c`,
       [fechaHora]
@@ -144,8 +155,25 @@ router.post('/reservar', authenticate, authorize('paciente'), reservaLimiter, ah
   res.status(201).json({ mensaje: `Horario retenido por ${AGENDA.minutosRetencion} minutos`, ...cita });
 }));
 
+// GET /agenda/cita/:id: estado de una cita propia (la pantalla de reserva espera la autorización previa)
+router.get('/cita/:id', authenticate, authorize('paciente'), ah(async (req, res) => {
+  const citaId = exigirUuid(req.params.id, 'Cita inválida');
+  const user = (req as AuthRequest).user!;
+  await pool.query('SELECT expirar_retenciones()');
+  const c = await conClaims(claimsDe(user), async (db) => (await db.query(
+    `SELECT id, codigo_cita, fecha_hora, estado, retencion_expira_en AS expira_en, monto_copago,
+            resultado_cobertura - 'tarifa' AS cobertura
+     FROM citas WHERE id = $1`,
+    [citaId]
+  )).rows[0]);
+  if (!c) throw new HttpError(404, 'Cita no encontrada');
+  res.json(c);
+}));
+
 // POST /agenda/cita/:id/confirmar: el paciente acepta el resultado de cobertura (Figura 11)
-//   sin copago -> confirmada; con copago -> pendiente_pago hasta que la pasarela confirme el pago
+//   EnVerificacion aprobada, sin copago   -> Confirmada
+//   EnVerificacion aprobada, con copago   -> PendientePago hasta que la pasarela confirme el pago
+//   SinCobertura, elige pago particular   -> PendientePago con la tarifa particular
 router.post('/cita/:id/confirmar', authenticate, authorize('paciente'), ah(async (req, res) => {
   const citaId = exigirUuid(req.params.id, 'Cita inválida');
   const user = (req as AuthRequest).user!;
@@ -157,10 +185,16 @@ router.post('/cita/:id/confirmar', authenticate, authorize('paciente'), ah(async
       [citaId]
     )).rows[0];
     if (!c) throw new HttpError(404, 'Cita no encontrada');
-    if (c.estado !== 'retenida' || !c.vigente) {
+    if (!c.vigente || !['retenida', 'en_verificacion', 'sin_cobertura'].includes(c.estado)) {
       throw new HttpError(409, 'La retención venció o la cita no se puede confirmar. Elija el horario de nuevo.');
     }
-    if (!c.resultado_cobertura) throw new HttpError(409, 'Primero se debe verificar la cobertura');
+    if (c.estado === 'retenida' || !c.resultado_cobertura) {
+      throw new HttpError(409, 'Primero se debe verificar la cobertura');
+    }
+    if (c.resultado_cobertura.pendiente) {
+      throw new HttpError(409, 'La aseguradora todavía no responde la autorización de esta prestación');
+    }
+    const particular = c.estado === 'sin_cobertura';
 
     const copago = Number(c.resultado_cobertura.copago ?? 0);
     if (copago > 0) {
@@ -170,9 +204,11 @@ router.post('/cita/:id/confirmar', authenticate, authorize('paciente'), ah(async
          WHERE id = $1 RETURNING retencion_expira_en`,
         [citaId, copago, AGENDA.minutosRetencion]
       );
-      await auditar(db, user.sub, 'ACEPTAR_COPAGO', 'cita', citaId, req.ip, { copago });
+      await auditar(db, user.sub, particular ? 'ELEGIR_PAGO_PARTICULAR' : 'ACEPTAR_COPAGO', 'cita', citaId, req.ip,
+        { copago });
       return { estado: 'pendiente_pago', monto: copago, expira_en: r.rows[0].retencion_expira_en,
-               codigo_cita: c.codigo_cita, mensaje: `Pague el copago de $${copago.toFixed(2)} para confirmar la cita` };
+               codigo_cita: c.codigo_cita,
+               mensaje: `Pague ${particular ? 'la consulta particular' : 'el copago'} de $${copago.toFixed(2)} para confirmar la cita` };
     }
 
     await db.query(
@@ -181,6 +217,7 @@ router.post('/cita/:id/confirmar', authenticate, authorize('paciente'), ah(async
        WHERE id = $1`,
       [citaId]
     );
+    await encolarHce(db, citaId, 'CITA_CONFIRMADA');
     await auditar(db, user.sub, 'CONFIRMAR', 'cita', citaId, req.ip, { codigo_cita: c.codigo_cita });
     return { estado: 'confirmada', codigo_cita: c.codigo_cita, mensaje: 'Cita confirmada' };
   });
@@ -195,6 +232,8 @@ router.get('/mis-citas', authenticate, authorize('paciente'), ah(async (req, res
   const filas = await conClaims(claimsDe(user), async (db) => (await db.query(
     `SELECT c.id, c.codigo_cita, c.especialidad, c.fecha_hora, c.estado, c.estado_pago, c.monto_copago,
             c.retencion_expira_en, (c.resultado_cobertura->>'cobertura')::boolean AS cubierta,
+            (c.resultado_cobertura->>'pendiente')::boolean AS autorizacion_pendiente,
+            c.resultado_cobertura->>'mensaje' AS mensaje_cobertura,
             c.profesional_id, c.veces_reprogramada,
             pr.nombres AS medico_nombres, pr.apellidos AS medico_apellidos,
             s.nombre AS sede, s.direccion AS sede_direccion,
@@ -220,7 +259,7 @@ router.delete('/cita/:id', authenticate, authorize('paciente', 'recepcion'), ah(
       [citaId]
     )).rows[0];
     if (!c) throw new HttpError(404, 'Cita no encontrada');
-    if (!['retenida', 'pendiente_pago', 'confirmada'].includes(c.estado)) {
+    if (!ESTADOS_CANCELABLES.includes(c.estado)) {
       throw new HttpError(400, 'No se puede cancelar una cita en este estado');
     }
     if (new Date(c.fecha_hora).getTime() <= Date.now()) {
@@ -246,6 +285,8 @@ router.delete('/cita/:id', authenticate, authorize('paciente', 'recepcion'), ah(
     if (reembolso) {
       await db.query(`UPDATE pagos SET estado = 'reembolsado', actualizado_en = now() WHERE cita_id = $1`, [citaId]);
     }
+    // La HCE solo conoce citas confirmadas: se le avisa si una de ellas se cancela
+    if (c.estado === 'confirmada') await encolarHce(db, citaId, 'CITA_CANCELADA');
     await auditar(db, user.sub, 'CANCELAR', 'cita', citaId, req.ip,
       { estado_anterior: c.estado, por: user.rol, reembolso });
     return { reembolso };
@@ -304,6 +345,7 @@ router.post('/cita/:id/reprogramar', authenticate, authorize('paciente', 'recepc
        WHERE id = $1`,
       [citaId, nueva]
     );
+    await encolarHce(db, citaId, 'CITA_REPROGRAMADA');
     await auditar(db, user.sub, 'REPROGRAMAR', 'cita', citaId, req.ip,
       { anterior: c.fecha_hora, nueva, por: user.rol });
     return c.fecha_hora;
@@ -322,7 +364,7 @@ router.get('/sede', authenticate, authorize('recepcion'), ah(async (req, res) =>
   await pool.query('SELECT expirar_retenciones()');
   const filas = await conClaims(claimsDe(user), async (db) => (await db.query(
     `SELECT c.id, c.codigo_cita, c.fecha_hora, c.especialidad, c.estado, c.estado_pago, c.monto_copago,
-            (c.resultado_cobertura->>'cobertura')::boolean AS cubierta,
+            (c.resultado_cobertura->>'cobertura')::boolean AS cubierta, c.llegada_en,
             c.profesional_id, pr.nombres || ' ' || pr.apellidos AS profesional,
             ${NOMBRE_ATENDIDO} AS paciente,
             CASE WHEN d.id IS NOT NULL THEN p.nombres || ' ' || p.apellidos END AS representante
@@ -344,7 +386,7 @@ router.get('/medico', authenticate, authorize('medico'), ah(async (req, res) => 
   const user = (req as AuthRequest).user!;
   if (!user.profesional_id) throw new HttpError(403, 'Su cuenta no está vinculada a un profesional');
   const filas = await conClaims(claimsDe(user), async (db) => (await db.query(
-    `SELECT c.id, c.codigo_cita, c.fecha_hora, c.estado, ${NOMBRE_ATENDIDO} AS paciente
+    `SELECT c.id, c.codigo_cita, c.fecha_hora, c.estado, c.llegada_en, ${NOMBRE_ATENDIDO} AS paciente
      FROM citas c
      LEFT JOIN pacientes p ON p.id = c.paciente_id
      LEFT JOIN dependientes d ON d.id = c.dependiente_id
@@ -355,6 +397,37 @@ router.get('/medico', authenticate, authorize('medico'), ah(async (req, res) => 
     [AGENDA.diasAMostrar + 1]
   )).rows);
   res.json(filas);
+}));
+
+// POST /agenda/cita/:id/llegada: recepción confirma que el paciente llegó (UC12). Solo citas confirmadas
+// de su sede (RLS), desde 2 horas antes hasta 2 horas después de la hora de la cita.
+router.post('/cita/:id/llegada', authenticate, authorize('recepcion'), ah(async (req, res) => {
+  const citaId = exigirUuid(req.params.id, 'Cita inválida');
+  const user = (req as AuthRequest).user!;
+
+  const pendientePago = await conClaims(claimsDe(user), async (db) => {
+    const c = (await db.query(
+      `SELECT estado, estado_pago, llegada_en,
+              fecha_hora BETWEEN now() - interval '2 hours' AND now() + interval '2 hours' AS a_tiempo
+       FROM citas WHERE id = $1 FOR UPDATE`,
+      [citaId]
+    )).rows[0];
+    if (!c) throw new HttpError(404, 'Cita no encontrada');
+    if (c.estado !== 'confirmada') throw new HttpError(409, 'Solo se registra la llegada de citas confirmadas');
+    if (c.llegada_en) throw new HttpError(409, 'La llegada ya estaba registrada');
+    if (!c.a_tiempo) throw new HttpError(409, 'La llegada se registra desde 2 horas antes hasta 2 horas después de la cita');
+
+    await db.query(
+      `UPDATE citas SET llegada_en = now(), llegada_registrada_por = $2, actualizado_en = now() WHERE id = $1`,
+      [citaId, user.sub]
+    );
+    await auditar(db, user.sub, 'CONFIRMAR_LLEGADA', 'cita', citaId, req.ip);
+    return c.estado_pago === 'pendiente';
+  });
+  res.json({
+    mensaje: pendientePago ? 'Llegada registrada. El copago está pendiente: cóbrelo en caja.' : 'Llegada registrada',
+    copago_pendiente: pendientePago,
+  });
 }));
 
 // POST /agenda/cita/:id/atencion: el médico marca atendida o ausente (la atención clínica va en la HCE)

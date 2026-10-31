@@ -16,6 +16,10 @@ ALTER TABLE consentimientos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auditoria_eventos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documentos_representacion ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notificaciones ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hce_envios ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incidentes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE solicitudes_derechos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE accesos_emergencia ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
 -- Claims de la sesión (los fija el backend por transacción)
@@ -122,13 +126,13 @@ $$;
 CREATE OR REPLACE FUNCTION citas_futuras_profesional(p_profesional UUID) RETURNS BIGINT
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     SELECT count(*) FROM citas WHERE profesional_id = p_profesional AND fecha_hora > now()
-      AND estado IN ('retenida', 'pendiente_pago', 'confirmada')
+      AND estado IN ('retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago', 'confirmada')
 $$;
 
 CREATE OR REPLACE FUNCTION citas_futuras_sede(p_sede UUID) RETURNS BIGINT
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     SELECT count(*) FROM citas WHERE sede_id = p_sede AND fecha_hora > now()
-      AND estado IN ('retenida', 'pendiente_pago', 'confirmada')
+      AND estado IN ('retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago', 'confirmada')
 $$;
 
 -- Perfil de paciente de un usuario (se necesita en el login, antes de tener claims)
@@ -144,7 +148,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     SELECT fecha_hora FROM citas
     WHERE profesional_id = p_profesional AND fecha_hora BETWEEN p_desde AND p_hasta
       AND (estado IN ('confirmada', 'atendida')
-           OR (estado IN ('retenida', 'pendiente_pago') AND retencion_expira_en > now()))
+           OR (estado IN ('retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago')
+               AND retencion_expira_en > now()))
 $$;
 
 CREATE OR REPLACE FUNCTION horario_ocupado(p_profesional UUID, p_fecha TIMESTAMPTZ) RETURNS BOOLEAN
@@ -152,17 +157,75 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     SELECT EXISTS (SELECT 1 FROM horarios_ocupados(p_profesional, p_fecha, p_fecha))
 $$;
 
--- Liberación perezosa de retenciones vencidas (Figura 11: Retenida/PendientePago -> Expirada)
+-- Transiciones por tiempo de la Figura 11, aplicadas de forma perezosa (antes de leer la agenda):
+--   EnVerificacion (autorización previa sin respuesta) -> SinCobertura ("rechazo o timeout"), con 10 minutos
+--   más para que el paciente elija pago particular o desista.
+--   Retenida, EnVerificacion, SinCobertura o PendientePago vencida -> Expirada (libera el horario).
+-- Cada cambio de estado queda en la bitácora.
+DROP FUNCTION IF EXISTS expirar_retenciones();
 CREATE OR REPLACE FUNCTION expirar_retenciones() RETURNS VOID
-LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
-    UPDATE citas SET estado = 'expirada', actualizado_en = now()
-    WHERE estado IN ('retenida', 'pendiente_pago') AND retencion_expira_en <= now()
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN
+        UPDATE citas SET estado = 'sin_cobertura',
+               resultado_cobertura = resultado_cobertura || jsonb_build_object(
+                   'cobertura', false, 'pendiente', false, 'pago_particular', true, 'codigo_autorizacion', NULL,
+                   'copago', (resultado_cobertura->>'tarifa')::numeric,
+                   'mensaje', 'La aseguradora no respondió a tiempo: se ofrece pago particular'),
+               monto_copago = (resultado_cobertura->>'tarifa')::numeric,
+               retencion_expira_en = now() + interval '10 minutes', actualizado_en = now()
+        WHERE estado = 'en_verificacion' AND (resultado_cobertura->>'pendiente')::boolean IS TRUE
+          AND retencion_expira_en <= now()
+        RETURNING id
+    LOOP
+        PERFORM registrar_auditoria(NULL, 'COBERTURA_TIMEOUT', 'cita', r.id, NULL, 'exito',
+                                    '{"estado": "sin_cobertura"}'::jsonb);
+    END LOOP;
+
+    FOR r IN
+        WITH vencidas AS (
+            SELECT id, estado FROM citas
+            WHERE estado IN ('retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago')
+              AND retencion_expira_en <= now()
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE citas c SET estado = 'expirada', actualizado_en = now()
+        FROM vencidas v WHERE c.id = v.id
+        RETURNING c.id, v.estado AS anterior
+    LOOP
+        PERFORM registrar_auditoria(NULL, 'EXPIRAR', 'cita', r.id, NULL, 'exito',
+                                    jsonb_build_object('estado_anterior', r.anterior));
+    END LOOP;
+END;
+$$;
+
+-- Acceso de emergencia (break-glass) vigente del soporte técnico para una sede (sección 3.1)
+CREATE OR REPLACE FUNCTION acceso_emergencia_vigente(p_usuario UUID, p_sede UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT EXISTS (SELECT 1 FROM accesos_emergencia
+                   WHERE solicitante_id = p_usuario AND sede_id = p_sede AND estado = 'aprobado' AND expira_en > now())
+$$;
+
+CREATE OR REPLACE FUNCTION paciente_en_emergencia(p_paciente UUID, p_usuario UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT EXISTS (SELECT 1 FROM citas c JOIN accesos_emergencia a ON a.sede_id = c.sede_id
+                   WHERE c.paciente_id = p_paciente AND a.solicitante_id = p_usuario
+                     AND a.estado = 'aprobado' AND a.expira_en > now())
+$$;
+
+-- El DPD ve el nombre y contacto solo de quien le presentó una solicitud de derechos
+CREATE OR REPLACE FUNCTION tiene_solicitud_derechos(p_paciente UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+    SELECT EXISTS (SELECT 1 FROM solicitudes_derechos WHERE paciente_id = p_paciente)
 $$;
 
 -- Conciliación (UC22): contabilidad ve monto, estado y token, sin identificación ni especialidad.
 -- La restricción de columnas la impone la base: el rol contabilidad no tiene políticas sobre las tablas.
+-- Cambió el tipo de retorno (columna medio): se elimina la versión anterior
+DROP FUNCTION IF EXISTS conciliacion_pagos(TIMESTAMPTZ, TIMESTAMPTZ);
 CREATE OR REPLACE FUNCTION conciliacion_pagos(p_desde TIMESTAMPTZ, p_hasta TIMESTAMPTZ)
-RETURNS TABLE (fecha TIMESTAMPTZ, referencia VARCHAR, monto NUMERIC, estado VARCHAR,
+RETURNS TABLE (fecha TIMESTAMPTZ, referencia VARCHAR, monto NUMERIC, estado VARCHAR, medio VARCHAR,
                token_pasarela VARCHAR, cuatro_ultimos VARCHAR, codigo_cita VARCHAR, sede VARCHAR)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 BEGIN
@@ -170,12 +233,21 @@ BEGIN
         RAISE EXCEPTION 'Acceso denegado a la conciliación' USING ERRCODE = '42501';
     END IF;
     RETURN QUERY
-        SELECT p.actualizado_en, p.referencia, p.monto, p.estado, p.token_pasarela, p.cuatro_ultimos,
+        SELECT p.actualizado_en, p.referencia, p.monto, p.estado, p.medio, p.token_pasarela, p.cuatro_ultimos,
                c.codigo_cita, s.nombre
         FROM pagos p JOIN citas c ON c.id = p.cita_id JOIN sedes s ON s.id = c.sede_id
         WHERE p.actualizado_en BETWEEN p_desde AND p_hasta
         ORDER BY p.actualizado_en;
 END;
+$$;
+
+-- Bandeja de salida hacia la HCE (sección 3.2, paso 9). Se llama dentro de la transacción de negocio,
+-- así el aviso queda registrado solo si el cambio de la cita se confirma. Copia únicamente los
+-- identificadores de cita y de paciente y la hora: nunca nombres, póliza ni datos clínicos.
+CREATE OR REPLACE FUNCTION encolar_hce(p_cita UUID, p_evento TEXT) RETURNS VOID
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+    INSERT INTO hce_envios (cita_id, paciente_id, fecha_hora, evento)
+    SELECT id, COALESCE(dependiente_id, paciente_id), fecha_hora, p_evento FROM citas WHERE id = p_cita
 $$;
 
 -- Política de conservación (S14, tabla 2.2): elimina o anonimiza lo que venció.
@@ -240,6 +312,13 @@ BEGIN
     DELETE FROM notificaciones WHERE creado_en < now() - interval '24 months';
     GET DIAGNOSTICS n = ROW_COUNT; r := r || jsonb_build_object('notificaciones_eliminadas', n);
 
+    DELETE FROM hce_envios WHERE creado_en < now() - interval '24 months';
+    GET DIAGNOSTICS n = ROW_COUNT; r := r || jsonb_build_object('envios_hce_eliminados', n);
+
+    -- Accesos de emergencia aprobados que vencieron: se cierran (el registro se conserva)
+    UPDATE accesos_emergencia SET estado = 'cerrado' WHERE estado = 'aprobado' AND expira_en < now();
+    GET DIAGNOSTICS n = ROW_COUNT; r := r || jsonb_build_object('accesos_emergencia_cerrados', n);
+
     DELETE FROM tokens_revocados WHERE expira_en < now();
     GET DIAGNOSTICS n = ROW_COUNT; r := r || jsonb_build_object('tokens_revocados_eliminados', n);
 
@@ -278,6 +357,12 @@ CREATE POLICY pacientes_medico ON pacientes FOR SELECT
 CREATE POLICY pacientes_aseguradora ON pacientes FOR SELECT
     USING (obtener_rol_claim() = 'aseguradora' AND obtener_aseguradora_claim() <> ''
            AND aseguradora = obtener_aseguradora_claim());
+-- Soporte técnico con acceso de emergencia aprobado: pacientes con citas en esa sede, solo lectura
+CREATE POLICY pacientes_soporte_emergencia ON pacientes FOR SELECT
+    USING (obtener_rol_claim() = 'soporte' AND paciente_en_emergencia(id, obtener_usuario_claim()));
+-- DPD: solo quien presentó una solicitud de derechos
+CREATE POLICY pacientes_dpd ON pacientes FOR SELECT
+    USING (obtener_rol_claim() = 'dpd' AND tiene_solicitud_derechos(id));
 -- Proceso interno: correo del paciente para recordatorios y avisos
 CREATE POLICY pacientes_sistema ON pacientes FOR SELECT
     USING (obtener_rol_claim() = 'sistema');
@@ -312,6 +397,43 @@ CREATE POLICY documentos_recepcion_delete ON documentos_representacion FOR DELET
 CREATE POLICY notificaciones_sistema ON notificaciones FOR ALL
     USING (obtener_rol_claim() = 'sistema') WITH CHECK (obtener_rol_claim() = 'sistema');
 
+-- ---------- ENVÍOS A LA HCE ----------
+CREATE POLICY hce_envios_sistema ON hce_envios FOR ALL
+    USING (obtener_rol_claim() = 'sistema') WITH CHECK (obtener_rol_claim() = 'sistema');
+
+-- ---------- INCIDENTES (UC21) ----------
+CREATE POLICY incidentes_seguridad ON incidentes FOR ALL
+    USING (obtener_rol_claim() IN ('oficial_seguridad', 'dpd'))
+    WITH CHECK (obtener_rol_claim() IN ('oficial_seguridad', 'dpd'));
+
+-- ---------- SOLICITUDES DE DERECHOS (UC09) ----------
+CREATE POLICY solicitudes_propias_select ON solicitudes_derechos FOR SELECT
+    USING (paciente_id = obtener_paciente_claim());
+CREATE POLICY solicitudes_propias_insert ON solicitudes_derechos FOR INSERT
+    WITH CHECK (paciente_id = obtener_paciente_claim() AND estado = 'recibida');
+CREATE POLICY solicitudes_dpd_select ON solicitudes_derechos FOR SELECT
+    USING (obtener_rol_claim() = 'dpd');
+CREATE POLICY solicitudes_dpd_update ON solicitudes_derechos FOR UPDATE
+    USING (obtener_rol_claim() = 'dpd') WITH CHECK (obtener_rol_claim() = 'dpd');
+
+-- ---------- ACCESO DE EMERGENCIA (break-glass) ----------
+CREATE POLICY emergencia_soporte_select ON accesos_emergencia FOR SELECT
+    USING (obtener_rol_claim() = 'soporte' AND solicitante_id = obtener_usuario_claim());
+CREATE POLICY emergencia_soporte_insert ON accesos_emergencia FOR INSERT
+    WITH CHECK (obtener_rol_claim() = 'soporte' AND solicitante_id = obtener_usuario_claim() AND estado = 'pendiente');
+-- El soporte solo puede cerrar su propio acceso antes de que venza
+CREATE POLICY emergencia_soporte_cerrar ON accesos_emergencia FOR UPDATE
+    USING (obtener_rol_claim() = 'soporte' AND solicitante_id = obtener_usuario_claim())
+    WITH CHECK (solicitante_id = obtener_usuario_claim() AND estado = 'cerrado');
+-- Aprobación de una segunda persona: el oficial de seguridad, que nunca puede aprobar su propia solicitud
+CREATE POLICY emergencia_oficial_select ON accesos_emergencia FOR SELECT
+    USING (obtener_rol_claim() = 'oficial_seguridad');
+CREATE POLICY emergencia_oficial_decidir ON accesos_emergencia FOR UPDATE
+    USING (obtener_rol_claim() = 'oficial_seguridad' AND estado = 'pendiente'
+           AND solicitante_id <> obtener_usuario_claim())
+    WITH CHECK (obtener_rol_claim() = 'oficial_seguridad' AND aprobado_por = obtener_usuario_claim()
+                AND solicitante_id <> obtener_usuario_claim());
+
 -- ---------- CITAS ----------
 CREATE POLICY citas_propietario ON citas FOR ALL
     USING (paciente_id = obtener_paciente_claim()) WITH CHECK (paciente_id = obtener_paciente_claim());
@@ -328,6 +450,14 @@ CREATE POLICY citas_medico_update ON citas FOR UPDATE
 -- Aseguradora: solo lectura de las citas de sus afiliados (solicitudes de cobertura)
 CREATE POLICY citas_aseguradora ON citas FOR SELECT
     USING (obtener_rol_claim() = 'aseguradora' AND es_afiliado_de(paciente_id, obtener_aseguradora_claim()));
+-- Aseguradora: autoriza o rechaza una prestación de sus afiliados mientras está en verificación (UC18)
+CREATE POLICY citas_aseguradora_autorizar ON citas FOR UPDATE
+    USING (obtener_rol_claim() = 'aseguradora' AND estado = 'en_verificacion'
+           AND es_afiliado_de(paciente_id, obtener_aseguradora_claim()))
+    WITH CHECK (es_afiliado_de(paciente_id, obtener_aseguradora_claim()));
+-- Soporte técnico con acceso de emergencia aprobado y vigente: solo lectura de la agenda de esa sede
+CREATE POLICY citas_soporte_emergencia ON citas FOR SELECT
+    USING (obtener_rol_claim() = 'soporte' AND acceso_emergencia_vigente(obtener_usuario_claim(), sede_id));
 -- Proceso interno del servidor (webhook firmado de la pasarela)
 CREATE POLICY citas_sistema ON citas FOR ALL
     USING (obtener_rol_claim() = 'sistema') WITH CHECK (obtener_rol_claim() = 'sistema');
@@ -339,6 +469,9 @@ CREATE POLICY pagos_propietario ON pagos FOR ALL
 -- Recepción ve solo el estado de pago de su sede
 CREATE POLICY pagos_recepcion ON pagos FOR SELECT
     USING (obtener_rol_claim() = 'recepcion' AND cita_de_sede(cita_id, obtener_sede_claim()));
+-- Recepción registra el cobro manual en caja de citas de su sede (UC14)
+CREATE POLICY pagos_recepcion_insert ON pagos FOR INSERT
+    WITH CHECK (obtener_rol_claim() = 'recepcion' AND cita_de_sede(cita_id, obtener_sede_claim()));
 -- Recepción registra reembolsos al cancelar citas pagadas de su sede
 CREATE POLICY pagos_recepcion_update ON pagos FOR UPDATE
     USING (obtener_rol_claim() = 'recepcion' AND cita_de_sede(cita_id, obtener_sede_claim()))

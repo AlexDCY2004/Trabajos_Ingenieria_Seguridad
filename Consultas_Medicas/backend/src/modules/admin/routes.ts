@@ -15,9 +15,12 @@ router.use(authenticate, authorize('admin'));
 
 const texto = (min: number, max: number) => z.string().trim().min(min).max(max);
 
+// Coordenadas públicas de la sede para "cerca de mí" (S05); el cálculo de distancia se hace en el dispositivo
 const sedeSchema = z.object({
   nombre: texto(3, 100),
   direccion: texto(5, 200),
+  latitud: z.number().min(-5.1).max(1.5).nullable().optional(),    // Ecuador continental e insular
+  longitud: z.number().min(-92.1).max(-75.1).nullable().optional(),
 });
 
 const profesionalSchema = z.object({
@@ -50,7 +53,7 @@ async function actualizar(tabla: 'sedes' | 'profesionales', id: string, campos: 
 
 router.get('/sedes', ah(async (_req, res) => {
   res.json((await pool.query(
-    `SELECT s.id, s.nombre, s.direccion, s.activo,
+    `SELECT s.id, s.nombre, s.direccion, s.latitud, s.longitud, s.activo,
             (SELECT count(*) FROM profesionales pr WHERE pr.sede_id = s.id AND pr.activo) AS profesionales_activos
      FROM sedes s ORDER BY s.nombre`
   )).rows);
@@ -60,7 +63,8 @@ router.post('/sedes', ah(async (req, res) => {
   const d = validar(sedeSchema, req.body);
   const user = (req as AuthRequest).user!;
   const sede = (await pool.query(
-    'INSERT INTO sedes (nombre, direccion) VALUES ($1, $2) RETURNING *', [d.nombre, d.direccion])).rows[0];
+    'INSERT INTO sedes (nombre, direccion, latitud, longitud) VALUES ($1, $2, $3, $4) RETURNING *',
+    [d.nombre, d.direccion, d.latitud ?? null, d.longitud ?? null])).rows[0];
   await auditar(pool, user.sub, 'CREAR_SEDE', 'sede', sede.id, req.ip, d);
   res.status(201).json(sede);
 }));

@@ -16,4 +16,7 @@ RUN npm run build
 
 EXPOSE 4000
 
+# Sin privilegios de root en tiempo de ejecución (R17): el código queda de solo lectura para el proceso
+USER node
+
 CMD ["node", "dist/app.js"]

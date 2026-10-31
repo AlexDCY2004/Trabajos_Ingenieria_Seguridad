@@ -1,0 +1,114 @@
+# Pipeline de integración continua con compuertas de seguridad (Figura 12 del informe, sección 6.1).
+# Ninguna versión avanza con hallazgos críticos o altos abiertos.
+name: Consultas Médicas - compuertas de seguridad
+
+on:
+  push:
+    paths: ['Consultas_Medicas/**', '.github/workflows/consultas-medicas.yml']
+  pull_request:
+    paths: ['Consultas_Medicas/**', '.github/workflows/consultas-medicas.yml']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: Consultas_Medicas
+
+jobs:
+  # ---------- Compuerta 1: código ----------
+  compuerta-codigo:
+    name: Compuerta 1 - código (secretos, SAST, dependencias, SBOM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detección de secretos (gitleaks)
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.18.4 \
+            detect --no-git --source /repo --config /repo/.gitleaks.toml --redact --verbose
+
+      - name: SAST (Semgrep, reglas OWASP Top 10 y TypeScript)
+        run: |
+          docker run --rm -v "$PWD:/src" semgrep/semgrep:1.85.0 \
+            semgrep scan --config p/owasp-top-ten --config p/typescript --config p/nodejsscan \
+            --severity ERROR --error --metrics off --exclude node_modules --exclude dist
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Dependencias vulnerables (npm audit, nivel alto)
+        run: |
+          for d in backend frontend; do
+            echo "== $d"
+            (cd "$d" && npm install --package-lock-only --ignore-scripts --no-audit && npm audit --audit-level=high)
+          done
+
+      - name: SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          path: Consultas_Medicas
+          format: cyclonedx-json
+          artifact-name: sbom-consultas-medicas.cdx.json
+
+  # ---------- Compilación, imágenes e infraestructura como código ----------
+  construir-y-escanear:
+    name: Compilar, escanear imágenes e IaC
+    needs: compuerta-codigo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compilar imágenes (el backend compila TypeScript en el build)
+        run: docker compose build backend frontend
+
+      - name: Escaneo de imágenes (Trivy)
+        run: |
+          for img in consultas_medicas-backend consultas_medicas-frontend; do
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.55.0 \
+              image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$img"
+          done
+
+      - name: Escaneo de configuración (Dockerfile y compose)
+        run: |
+          docker run --rm -v "$PWD:/src" aquasec/trivy:0.55.0 \
+            config --severity CRITICAL,HIGH --exit-code 1 /src
+
+  # ---------- Compuerta 2: ejecución ----------
+  compuerta-ejecucion:
+    name: Compuerta 2 - ejecución (verificaciones, cross-tenant y BOLA, carga, DAST)
+    needs: construir-y-escanear
+    runs-on: ubuntu-latest
+    env:
+      RATE_LIMIT_POR_MINUTO: '100000'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Desplegar en pruebas
+        run: |
+          docker compose up -d --build postgres redis mailpit backend frontend
+          timeout 120 bash -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
+          docker exec citas_backend npm run seed
+
+      - name: Verificaciones de la base (V01, V03, V04, V07, V15, V16)
+        run: docker exec citas_backend npm run verificar
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Pruebas de flujos y controles (cross-tenant, Figura 11, CAPTCHA, break-glass)
+        run: node pruebas/flujos-seguridad.js
+
+      - name: Prueba de carga (k6, objetivos de la sección 3.3)
+        run: docker run --rm --network host -v "$PWD/pruebas:/pruebas" grafana/k6:0.53.0 run /pruebas/carga.k6.js
+
+      - name: DAST (OWASP ZAP baseline sobre la aplicación web)
+        run: |
+          docker run --rm --network host -v "$PWD:/zap/wrk:rw" -t ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t http://localhost:5173 -I -r zap-informe.html
+
+      - name: Registros del backend
+        if: always()
+        run: docker logs citas_backend --tail 200

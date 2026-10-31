@@ -13,7 +13,7 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS profesional_id UUID REFERENCES pro
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS aseguradora VARCHAR(100);
 
 COMMENT ON COLUMN citas.estado IS
-    'retenida, pendiente_pago, confirmada, atendida, ausente, cancelada, expirada (Figura 11)';
+    'Figura 11: retenida, en_verificacion, sin_cobertura, pendiente_pago, confirmada, atendida, ausente, cancelada, expirada';
 
 DO $$
 BEGIN
@@ -41,3 +41,5 @@ GRANT SELECT, INSERT, DELETE ON tokens_revocados TO portal_app;
 -- Documentos de representación: se eliminan al verificar (S06). Notificaciones: registro de envíos.
 GRANT SELECT, INSERT, DELETE ON documentos_representacion TO portal_app;
 GRANT SELECT, INSERT, UPDATE ON notificaciones TO portal_app;
+-- HCE, incidentes, solicitudes de derechos y accesos de emergencia: sin DELETE (quedan como evidencia)
+GRANT SELECT, INSERT, UPDATE ON hce_envios, incidentes, solicitudes_derechos, accesos_emergencia TO portal_app;

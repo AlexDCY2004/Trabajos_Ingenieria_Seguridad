@@ -1,0 +1,18 @@
+# Detección de secretos (compuerta 1 del pipeline, Figura 12).
+# Se usan las reglas por defecto de gitleaks. Solo se excluyen los secretos de DESARROLLO documentados como
+# tales (docker-compose.yml, valores por defecto que el backend rechaza con NODE_ENV=production, contraseña
+# de los usuarios de prueba). Cualquier otro secreto en el código hace fallar el pipeline.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Secretos de desarrollo documentados"
+paths = [
+  '''docker-compose\.yml''',
+  '''database/05_rol_aplicacion\.sql''',
+  '''backend/src/config/cifrado\.ts''',
+  '''backend/src/scripts/seed\.ts''',
+  '''pruebas/flujos-seguridad\.js''',
+  '''node_modules''',
+  '''dist''',
+]

@@ -56,7 +56,14 @@ export function esHorarioValido(fechaISO: string, ahora = new Date()): boolean {
     && esHoraLaboral(l.hora) && AGENDA.diasLaborables.includes(l.diaSemana);
 }
 
-// SQL: una cita ocupa el horario si está confirmada/atendida, o retenida/pendiente de pago y sin vencer.
+// Estados de la Figura 11 que retienen el horario mientras no venza la retención
+export const ESTADOS_EN_PROCESO = ['retenida', 'en_verificacion', 'sin_cobertura', 'pendiente_pago'];
+// Estados en los que la cita todavía se puede cancelar (el paciente desiste o se libera el horario)
+export const ESTADOS_CANCELABLES = [...ESTADOS_EN_PROCESO, 'confirmada'];
+
+const LISTA_EN_PROCESO = ESTADOS_EN_PROCESO.map((e) => `'${e}'`).join(', ');
+export const SQL_EN_PROCESO = `c.estado IN (${LISTA_EN_PROCESO}) AND c.retencion_expira_en > now()`;
+
+// SQL: una cita ocupa el horario si está confirmada/atendida, o en proceso y sin vencer.
 // Para citas de otros pacientes se usa la función horarios_ocupados() (RLS no deja verlas).
-export const SQL_OCUPA_HORARIO = `(c.estado IN ('confirmada', 'atendida')
-  OR (c.estado IN ('retenida', 'pendiente_pago') AND c.retencion_expira_en > now()))`;
+export const SQL_OCUPA_HORARIO = `(c.estado IN ('confirmada', 'atendida') OR (${SQL_EN_PROCESO}))`;

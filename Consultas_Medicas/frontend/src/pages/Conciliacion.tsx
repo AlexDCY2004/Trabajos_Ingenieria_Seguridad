@@ -8,6 +8,7 @@ interface Pago {
   referencia: string;
   monto: string;
   estado: string;
+  medio: 'pasarela' | 'caja';
   token_pasarela: string;
   cuatro_ultimos: string | null;
   codigo_cita: string;
@@ -79,7 +80,7 @@ export default function Conciliacion() {
                   <tr>
                     <th className="px-4 py-3">Fecha</th><th className="px-4 py-3">Referencia</th><th className="px-4 py-3">Cita</th>
                     <th className="px-4 py-3">Sede</th><th className="px-4 py-3">Monto</th><th className="px-4 py-3">Estado</th>
-                    <th className="px-4 py-3">Token pasarela</th>
+                    <th className="px-4 py-3">Medio</th><th className="px-4 py-3">Token / comprobante</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -91,6 +92,7 @@ export default function Conciliacion() {
                       <td className="px-4 py-2">{p.sede}</td>
                       <td className="px-4 py-2">{formatoDinero(p.monto)}</td>
                       <td className="px-4 py-2">{p.estado}</td>
+                      <td className="px-4 py-2">{p.medio === 'caja' ? 'Caja' : 'Pasarela'}</td>
                       <td className="px-4 py-2 font-mono text-xs">{p.token_pasarela}{p.cuatro_ultimos ? ` · ****${p.cuatro_ultimos}` : ''}</td>
                     </tr>
                   ))}

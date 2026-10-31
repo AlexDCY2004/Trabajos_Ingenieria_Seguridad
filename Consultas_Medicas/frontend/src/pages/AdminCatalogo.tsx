@@ -24,7 +24,8 @@ interface Profesional {
 export default function AdminCatalogo() {
   const [sedes, setSedes] = useState<Sede[]>([]);
   const [profesionales, setProfesionales] = useState<Profesional[]>([]);
-  const [nuevaSede, setNuevaSede] = useState({ nombre: '', direccion: '' });
+  // Coordenadas opcionales: permiten ordenar por cercanía en el catálogo público (S05)
+  const [nuevaSede, setNuevaSede] = useState({ nombre: '', direccion: '', latitud: '', longitud: '' });
   const [nuevoProf, setNuevoProf] = useState({ nombres: '', apellidos: '', especialidad: '', sede_id: '' });
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
 
@@ -49,7 +50,12 @@ export default function AdminCatalogo() {
 
   const crearSede = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (await ejecutar(() => adminService.crearSede(nuevaSede), 'Sede creada')) setNuevaSede({ nombre: '', direccion: '' });
+    const coordenada = (v: string) => (v.trim() === '' ? null : Number(v));
+    const datos = { nombre: nuevaSede.nombre, direccion: nuevaSede.direccion,
+      latitud: coordenada(nuevaSede.latitud), longitud: coordenada(nuevaSede.longitud) };
+    if (await ejecutar(() => adminService.crearSede(datos), 'Sede creada')) {
+      setNuevaSede({ nombre: '', direccion: '', latitud: '', longitud: '' });
+    }
   };
 
   const crearProfesional = async (e: React.FormEvent) => {
@@ -86,6 +92,10 @@ export default function AdminCatalogo() {
             onChange={(e) => setNuevaSede({ ...nuevaSede, nombre: e.target.value })} className={`${input} flex-1 min-w-40`} />
           <input required placeholder="Dirección" maxLength={200} value={nuevaSede.direccion}
             onChange={(e) => setNuevaSede({ ...nuevaSede, direccion: e.target.value })} className={`${input} flex-[2] min-w-60`} />
+          <input type="number" step="0.000001" min={-5.1} max={1.5} placeholder="Latitud (opcional)" value={nuevaSede.latitud}
+            onChange={(e) => setNuevaSede({ ...nuevaSede, latitud: e.target.value })} className={`${input} w-40`} />
+          <input type="number" step="0.000001" min={-92.1} max={-75.1} placeholder="Longitud (opcional)" value={nuevaSede.longitud}
+            onChange={(e) => setNuevaSede({ ...nuevaSede, longitud: e.target.value })} className={`${input} w-40`} />
           <button className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">Agregar sede</button>
         </form>
         <ul className="divide-y divide-gray-100 text-sm">
