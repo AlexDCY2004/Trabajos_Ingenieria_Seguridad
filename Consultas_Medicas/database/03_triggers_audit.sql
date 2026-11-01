@@ -51,17 +51,18 @@ BEGIN
 END;
 $$;
 
+-- Por sentencia: se rechaza cualquier UPDATE o DELETE aunque no afecte filas (con triggers por fila,
+-- una sentencia sobre la bitácora vacía o sin coincidencias terminaba sin error)
 DROP TRIGGER IF EXISTS trg_prohibir_update_auditoria ON auditoria_eventos;
 CREATE TRIGGER trg_prohibir_update_auditoria
 BEFORE UPDATE ON auditoria_eventos
-FOR EACH ROW EXECUTE FUNCTION prohibir_modificacion_auditoria();
+FOR EACH STATEMENT EXECUTE FUNCTION prohibir_modificacion_auditoria();
 
 DROP TRIGGER IF EXISTS trg_prohibir_delete_auditoria ON auditoria_eventos;
 CREATE TRIGGER trg_prohibir_delete_auditoria
 BEFORE DELETE ON auditoria_eventos
-FOR EACH ROW EXECUTE FUNCTION prohibir_modificacion_auditoria();
+FOR EACH STATEMENT EXECUTE FUNCTION prohibir_modificacion_auditoria();
 
--- TRUNCATE no dispara los triggers por fila: necesita su propio trigger por sentencia
 DROP TRIGGER IF EXISTS trg_prohibir_truncate_auditoria ON auditoria_eventos;
 CREATE TRIGGER trg_prohibir_truncate_auditoria
 BEFORE TRUNCATE ON auditoria_eventos

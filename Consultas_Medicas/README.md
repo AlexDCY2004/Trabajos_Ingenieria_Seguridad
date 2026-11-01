@@ -7,7 +7,7 @@ S01 a S14, riesgos R01 a R17 y plan de verificación V01 a V21.
 
 ```bash
 docker compose up -d --build              # tras cualquier cambio de código, reconstruir
-docker exec citas_backend npm run seed    # datos de prueba
+docker exec citas_backend node dist/scripts/seed.js    # datos de prueba
 ```
 
 | Servicio | URL |
@@ -41,7 +41,7 @@ Para ver la autorización previa (Figura 11, UC18): con Ana reserve con el cardi
 ## Verificar
 
 ```bash
-docker exec citas_backend npm run verificar   # V01, V03, V04, V07, V15, V16 contra la base
+docker exec citas_backend node dist/scripts/verificaciones.js   # V01, V03, V04, V07, V15, V16 contra la base
 node pruebas/flujos-seguridad.js              # flujos y controles de punta a punta contra la API
 k6 run pruebas/carga.k6.js                    # carga (V08); requiere RATE_LIMIT_POR_MINUTO alto
 ```

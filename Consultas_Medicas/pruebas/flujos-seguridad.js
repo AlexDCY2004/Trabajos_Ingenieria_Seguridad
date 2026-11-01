@@ -139,7 +139,8 @@ async function siguienteHorario(profId, token, saltar = 0) {
   ok(agenda.status === 200 && 'llegada_en' in agenda.data[0], 'agenda de sede incluye llegada');
 
   // ---------- Contraseñas filtradas y verificación de teléfono (S02, V17) ----------
-  const email = `prueba.${Date.now()}@correo.com`;
+  // Marca de tiempo en base 36: 13 dígitos seguidos podrían pasar Luhn y hacer fallar V01
+  const email = `prueba.${Date.now().toString(36)}@correo.com`;
   const base = { email, nombres: 'Lucia', apellidos: 'Mena', tipo_identificacion: 'pasaporte',
     identificacion: 'PX' + Date.now().toString().slice(-8), fecha_nacimiento: '1995-05-05', telefono: '0991112233',
     acepta_privacidad: true };
@@ -209,7 +210,8 @@ async function siguienteHorario(profId, token, saltar = 0) {
 
   // ---------- Conciliación con medio de pago ----------
   const cont = await loginPersonal('contabilidad@citas.com');
-  const hoy = new Date().toISOString().slice(0, 10);
+  // El backend interpreta las fechas en hora de Ecuador (UTC-5)
+  const hoy = new Date(Date.now() - 5 * 3600 * 1000).toISOString().slice(0, 10);
   const conc = await req('GET', `/pagos/conciliacion?desde=${hoy}&hasta=${hoy}`, cont);
   ok(conc.data.pagos.some((p) => p.medio === 'caja') && conc.data.pagos.some((p) => p.medio === 'pasarela'), 'conciliación distingue pasarela y caja');
 

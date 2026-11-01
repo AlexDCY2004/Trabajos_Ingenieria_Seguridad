@@ -111,7 +111,7 @@ router.get('/aseguradoras', (_req, res) => {
 });
 
 const polizaSchema = z.object({
-  aseguradora: z.enum(ASEGURADORAS as [string, ...string[]], { errorMap: () => ({ message: 'Aseguradora no válida' }) }),
+  aseguradora: z.enum(ASEGURADORAS as [string, ...string[]], { error: 'Aseguradora no válida' }),
   numero_poliza: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{6,30}$/, 'Número de póliza: 6 a 30 letras, números o guiones'),
   titular: z.string().trim().min(LIMITES.nombre.min).max(100).regex(REGEX_NOMBRE, 'Titular: solo letras y espacios'),
   beneficiario: z.string().trim().max(100).regex(REGEX_NOMBRE, 'Beneficiario: solo letras y espacios').optional().or(z.literal('')),

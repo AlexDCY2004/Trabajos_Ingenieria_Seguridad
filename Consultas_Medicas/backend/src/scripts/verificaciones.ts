@@ -44,9 +44,11 @@ async function comoApi<T>(claims: Record<string, string>, fn: (c: PoolClient) =>
 }
 
 async function v01() {
+  // Las columnas hash_* guardan SHA-256 en hexadecimal: sus tramos de dígitos dan falsos positivos de Luhn
   const columnas = (await duena.query(
     `SELECT table_name, column_name FROM information_schema.columns
-     WHERE table_schema = 'public' AND data_type IN ('text', 'character varying', 'jsonb')`)).rows;
+     WHERE table_schema = 'public' AND data_type IN ('text', 'character varying', 'jsonb')
+       AND column_name NOT LIKE 'hash\\_%'`)).rows;
   let coincidencias = 0;
   for (const { table_name: t, column_name: col } of columnas) {
     const filas = (await duena.query(

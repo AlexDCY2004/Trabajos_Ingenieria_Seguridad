@@ -37,13 +37,13 @@ export const VERSION_AVISO_PRIVACIDAD = '1.0';
 // ---------- Esquemas de validación ----------
 
 const nombreSchema = (campo: string) =>
-  z.string({ required_error: `${campo} es obligatorio` })
+  z.string({ error: `${campo} es obligatorio` })
     .trim()
     .min(LIMITES.nombre.min, `${campo} debe tener al menos ${LIMITES.nombre.min} caracteres`)
     .max(LIMITES.nombre.max, `${campo} no puede superar ${LIMITES.nombre.max} caracteres`)
     .regex(REGEX_NOMBRE, `${campo} solo puede contener letras y espacios`);
 
-const emailSchema = z.string({ required_error: 'El correo es obligatorio' })
+const emailSchema = z.string({ error: 'El correo es obligatorio' })
   .trim()
   .toLowerCase()
   .max(LIMITES.email.max, `El correo no puede superar ${LIMITES.email.max} caracteres`)
@@ -51,26 +51,26 @@ const emailSchema = z.string({ required_error: 'El correo es obligatorio' })
 
 const registroSchema = z.object({
   email: emailSchema,
-  password: z.string({ required_error: 'La contraseña es obligatoria' })
+  password: z.string({ error: 'La contraseña es obligatoria' })
     .min(LIMITES.password.min, `La contraseña debe tener al menos ${LIMITES.password.min} caracteres`)
     .max(LIMITES.password.max, `La contraseña no puede superar ${LIMITES.password.max} caracteres`)
     .regex(REGEX_PASSWORD, 'La contraseña debe incluir mayúscula, minúscula, número y símbolo'),
   nombres: nombreSchema('Nombres'),
   apellidos: nombreSchema('Apellidos'),
-  tipo_identificacion: z.enum(['cedula', 'pasaporte'], { errorMap: () => ({ message: 'Tipo de identificación inválido' }) }),
-  identificacion: z.string({ required_error: 'La identificación es obligatoria' })
+  tipo_identificacion: z.enum(['cedula', 'pasaporte'], { error: 'Tipo de identificación inválido' }),
+  identificacion: z.string({ error: 'La identificación es obligatoria' })
     .trim()
     .toUpperCase()
     .max(LIMITES.pasaporte.max, 'Identificación demasiado larga'),
-  fecha_nacimiento: z.string({ required_error: 'La fecha de nacimiento es obligatoria' })
+  fecha_nacimiento: z.string({ error: 'La fecha de nacimiento es obligatoria' })
     .date('Fecha de nacimiento inválida') // YYYY-MM-DD (formato de <input type="date">)
     .refine((f) => calcularEdad(f) >= LIMITES.edad.min, `Debe ser mayor de ${LIMITES.edad.min} años`)
     .refine((f) => calcularEdad(f) <= LIMITES.edad.max, 'Fecha de nacimiento fuera de rango'),
-  telefono: z.string({ required_error: 'El teléfono es obligatorio' })
+  telefono: z.string({ error: 'El teléfono es obligatorio' })
     .trim()
     .regex(REGEX_TELEFONO, 'Teléfono inválido: celular 09XXXXXXXX o convencional 0XXXXXXXX'),
   // Aviso de privacidad previo (LOPDP art. 12) y publicidad opcional, separada y sin premarcar (S14)
-  acepta_privacidad: z.literal(true, { errorMap: () => ({ message: 'Debe aceptar el aviso de privacidad' }) }),
+  acepta_privacidad: z.literal(true, { error: 'Debe aceptar el aviso de privacidad' }),
   acepta_publicidad: z.boolean().optional().default(false),
 }).superRefine((d, ctx) => {
   if (d.tipo_identificacion === 'cedula' && !validarCedulaEcuador(d.identificacion)) {
