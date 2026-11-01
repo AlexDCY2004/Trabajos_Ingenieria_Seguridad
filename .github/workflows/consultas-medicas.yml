@@ -82,6 +82,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RATE_LIMIT_POR_MINUTO: '100000'
+      # Contraseña de las cuentas de prueba: la usan el seed (vía docker compose) y pruebas/flujos-seguridad.js
+      PASSWORD_PRUEBA: 'Prueba#2026'
     steps:
       - uses: actions/checkout@v4
 

@@ -23,7 +23,12 @@ if (process.env.NODE_ENV === 'production') {
 
 const pool = new Pool({ connectionString: process.env.SEED_DATABASE_URL || process.env.DATABASE_URL });
 
-const PASSWORD_PRUEBA = 'Prueba#2026';
+// La contraseña de las cuentas de prueba viene del entorno (docker-compose.yml), no del código
+const PASSWORD_PRUEBA = process.env.PASSWORD_PRUEBA ?? '';
+if (!PASSWORD_PRUEBA) {
+  console.error('[seed] Abortado: defina PASSWORD_PRUEBA con la contraseña de los usuarios de prueba');
+  process.exit(1);
+}
 
 // Completa 9 dígitos con el dígito verificador de la cédula ecuatoriana
 function cedula(base9: string): string {

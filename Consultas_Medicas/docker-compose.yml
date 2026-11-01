@@ -72,6 +72,8 @@ services:
       DATABASE_URL: postgresql://portal_app:portal_app_dev_change_me@postgres:5432/citas_db
       # Solo para `npm run seed` (datos de prueba). La API no la usa.
       SEED_DATABASE_URL: postgresql://citas_app:citas_pass_dev@postgres:5432/citas_db
+      # Contraseña de las cuentas que crea el seed (solo datos de prueba)
+      PASSWORD_PRUEBA: ${PASSWORD_PRUEBA:-Prueba#2026}
       REDIS_URL: redis://:redis_pass_dev@redis:6379
       JWT_SECRET: supersecret_jwt_dev_change_in_prod
       JWT_REFRESH_SECRET: supersecret_refresh_dev_change_in_prod

@@ -42,7 +42,7 @@ Para ver la autorización previa (Figura 11, UC18): con Ana reserve con el cardi
 
 ```bash
 docker exec citas_backend node dist/scripts/verificaciones.js   # V01, V03, V04, V07, V15, V16 contra la base
-node pruebas/flujos-seguridad.js              # flujos y controles de punta a punta contra la API
+PASSWORD_PRUEBA='Prueba#2026' node pruebas/flujos-seguridad.js   # flujos y controles de punta a punta contra la API
 k6 run pruebas/carga.k6.js                    # carga (V08); requiere RATE_LIMIT_POR_MINUTO alto
 ```
 

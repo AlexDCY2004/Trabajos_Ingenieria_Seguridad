@@ -1,5 +1,5 @@
 // Pruebas de punta a punta de los controles del informe contra la API en ejecución (Node 20, sin dependencias).
-// Uso:  node pruebas/flujos-seguridad.js        (API_URL=http://localhost:4000 por defecto)
+// Uso:  PASSWORD_PRUEBA='Prueba#2026' node pruebas/flujos-seguridad.js   (API_URL=http://localhost:4000 por defecto)
 //
 // Requisitos: contenedores levantados, `npm run seed` aplicado y el personal sin segundo factor enrolado
 // (la prueba enrola el TOTP de cada cuenta). Para repetirla, restablezca el segundo factor del personal:
@@ -12,7 +12,12 @@
 // break-glass del soporte y conciliación por medio de pago.
 const crypto = require('crypto');
 const API = process.env.API_URL || 'http://localhost:4000';
-const PASS = 'Prueba#2026';
+// Misma contraseña con la que el seed creó las cuentas (PASSWORD_PRUEBA de docker-compose.yml)
+const PASS = process.env.PASSWORD_PRUEBA;
+if (!PASS) {
+  console.error('Defina PASSWORD_PRUEBA con la contraseña de los usuarios de prueba');
+  process.exit(1);
+}
 let fallos = 0;
 
 function ok(cond, msg, extra) {
