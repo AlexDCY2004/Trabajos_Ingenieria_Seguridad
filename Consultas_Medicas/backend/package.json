@@ -37,5 +37,8 @@
     "@types/node": "^20.12.7",
     "@types/qrcode": "^1.5.5",
     "@types/nodemailer": "^6.4.17"
+  },
+  "allowScripts": {
+    "argon2@0.40.3": true
   }
 }
