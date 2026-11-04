@@ -60,7 +60,11 @@ export default function Layout() {
             </div>
             {usuario ? (
               <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-600 hidden sm:inline">{usuario.email}</span>
+                <span className="text-sm text-gray-600 hidden sm:inline">
+                  {usuario.nombres && usuario.apellidos
+                    ? `${usuario.nombres} ${usuario.apellidos}`
+                    : usuario.email}
+                </span>
                 <button
                   onClick={cerrar}
                   className="flex items-center gap-2 text-sm font-medium text-red-600 hover:text-red-700"

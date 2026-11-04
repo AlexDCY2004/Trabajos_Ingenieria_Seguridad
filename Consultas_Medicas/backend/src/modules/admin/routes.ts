@@ -1,10 +1,20 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import argon2 from 'argon2';
 import { pool, auditar } from '../../config/database';
 import { authenticate, AuthRequest } from '../../middlewares/auth';
 import { authorize } from '../../middlewares/rbac';
 import { ah, HttpError, exigirUuid } from '../../utils/http';
 import { REGEX_NOMBRE } from '../../utils/validaciones';
+
+function emailDe(nombres: string, apellidos: string): string {
+  const normaliza = (s: string) =>
+    s.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '.')
+      .replace(/^\.+|\.+$/g, '');
+  return `${normaliza(nombres)}.${normaliza(apellidos)}@citas.com`;
+}
 
 // Administrador de catálogo (sección 3.1, UC19): gestiona sedes y profesionales. No ve pacientes,
 // citas ni pagos: para desactivar solo consulta cuántas citas futuras quedan (funciones de la base).
@@ -28,6 +38,8 @@ const profesionalSchema = z.object({
   apellidos: texto(2, 100).regex(REGEX_NOMBRE, 'Apellidos: solo letras y espacios'),
   especialidad: texto(3, 100).regex(REGEX_NOMBRE, 'Especialidad: solo letras y espacios'),
   sede_id: z.string().uuid(),
+  email: z.string().email().optional(),
+  password: z.string().min(6).optional(),
 });
 
 const actualizarSede = sedeSchema.partial().extend({ activo: z.boolean().optional() });
@@ -101,8 +113,20 @@ router.post('/profesionales', ah(async (req, res) => {
     `INSERT INTO profesionales (nombres, apellidos, especialidad, sede_id) VALUES ($1, $2, $3, $4) RETURNING *`,
     [d.nombres, d.apellidos, d.especialidad, d.sede_id]
   )).rows[0];
+
+  // Crear automáticamente el usuario de médico con acceso al portal
+  const email = d.email ?? emailDe(d.nombres, d.apellidos);
+  const password = d.password ?? process.env.PASSWORD_PRUEBA ?? 'Prueba#2026';
+  const hash = await argon2.hash(password);
+  await pool.query(
+    `INSERT INTO usuarios (email, hash_contrasena, rol_id, correo_verificado, profesional_id, activo)
+     VALUES ($1, $2, (SELECT id FROM roles WHERE nombre = 'medico'), true, $3, true)
+     ON CONFLICT (email) DO NOTHING`,
+    [email, hash, prof.id]
+  );
+
   await auditar(pool, user.sub, 'CREAR_PROFESIONAL', 'profesional', prof.id, req.ip, d);
-  res.status(201).json(prof);
+  res.status(201).json({ ...prof, credenciales: { email, password } });
 }));
 
 router.patch('/profesionales/:id', ah(async (req, res) => {
@@ -123,6 +147,23 @@ router.patch('/profesionales/:id', ah(async (req, res) => {
   const prof = await actualizar('profesionales', id, d);
   await auditar(pool, user.sub, 'EDITAR_PROFESIONAL', 'profesional', id, req.ip, d);
   res.json(prof);
+}));
+
+// Borrar un profesional (y su usuario de médico asociado) solo si no tiene citas
+router.delete('/profesionales/:id', ah(async (req, res) => {
+  const id = exigirUuid(req.params.id, 'Profesional inválido');
+  const user = (req as AuthRequest).user!;
+  const citas = Number((await pool.query(
+    'SELECT count(*) AS n FROM citas WHERE profesional_id = $1', [id]
+  )).rows[0].n);
+  if (citas > 0) {
+    throw new HttpError(409, `El profesional tiene ${citas} citas asociadas; desactívelo en lugar de borrarlo`);
+  }
+  await pool.query('DELETE FROM usuarios WHERE profesional_id = $1', [id]);
+  const borrado = await pool.query('DELETE FROM profesionales WHERE id = $1 RETURNING *', [id]);
+  if (borrado.rowCount === 0) throw new HttpError(404, 'Profesional no encontrado');
+  await auditar(pool, user.sub, 'BORRAR_PROFESIONAL', 'profesional', id, req.ip);
+  res.json({ mensaje: 'Profesional borrado', profesional: borrado.rows[0] });
 }));
 
 export default router;

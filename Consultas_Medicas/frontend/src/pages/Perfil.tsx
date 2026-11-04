@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import QRCode from 'qrcode';
 import {
   User, Shield, Mail, Phone, KeyRound, Building, CheckCircle, AlertCircle, Download, UserX, Scale,
 } from 'lucide-react';
@@ -47,6 +48,15 @@ export default function Perfil() {
   const [mensaje, setMensaje] = useState({ texto: '', tipo: '' });
   const [solicitudes, setSolicitudes] = useState<SolicitudDerecho[]>([]);
   const [nuevaSolicitud, setNuevaSolicitud] = useState({ tipo: 'rectificacion', detalle: '' });
+  // Autenticación en dos pasos (paciente)
+  const [mfaActivo, setMfaActivo] = useState<boolean | null>(null);
+  const [mfaConfigurando, setMfaConfigurando] = useState(false);
+  const [mfaSecreto, setMfaSecreto] = useState('');
+  const [mfaOtpauth, setMfaOtpauth] = useState('');
+  const [mfaQr, setMfaQr] = useState('');
+  const [codigoMFA, setCodigoMFA] = useState('');
+  const [mfaDesactivando, setMfaDesactivando] = useState(false);
+  const [mfaError, setMfaError] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -57,6 +67,11 @@ export default function Perfil() {
         setPublicidad(consentimientos.find((c) => c.tipo === 'publicidad')?.aceptado ?? false);
         setAseguradoras((await coberturaService.aseguradoras()).data);
         setSolicitudes((await derechosService.mias()).data);
+        try {
+          setMfaActivo((await authService.mfaEstado()).data.activo);
+        } catch {
+          setMfaError(true);
+        }
       }
     } finally {
       setCargando(false);
@@ -138,6 +153,50 @@ export default function Perfil() {
     }
   };
 
+  const activarMFA = async () => {
+    try {
+      setMfaConfigurando(true);
+      const r = await authService.mfaActivar();
+      setMfaSecreto(r.data.secreto);
+      setMfaOtpauth(r.data.otpauth);
+      try {
+        const qr = await QRCode.toDataURL(r.data.otpauth, { width: 200, margin: 2 });
+        setMfaQr(qr);
+      } catch {
+        setMfaQr('');
+      }
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo iniciar la activación'), tipo: 'error' });
+      setMfaConfigurando(false);
+    }
+  };
+
+  const verificarMFA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await authService.mfaVerificar(codigoMFA);
+      setMfaActivo(true);
+      setMfaConfigurando(false);
+      setCodigoMFA('');
+      setMensaje({ texto: 'Autenticación en dos pasos activada', tipo: 'exito' });
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'Código incorrecto'), tipo: 'error' });
+    }
+  };
+
+  const desactivarMFA = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await authService.mfaDesactivar(codigoMFA);
+      setMfaActivo(false);
+      setMfaDesactivando(false);
+      setCodigoMFA('');
+      setMensaje({ texto: 'Autenticación en dos pasos desactivada', tipo: 'exito' });
+    } catch (err: any) {
+      setMensaje({ texto: mensajeError(err, 'No se pudo desactivar'), tipo: 'error' });
+    }
+  };
+
   if (cargando) return <div className="p-4 text-center">Cargando perfil...</div>;
   if (!perfil) return <div className="p-4 text-center text-red-600">No se pudo cargar el perfil.</div>;
 
@@ -155,9 +214,15 @@ export default function Perfil() {
 
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
         <div className="flex items-center gap-4 mb-6">
-          <User className="h-10 w-10 rounded-full bg-blue-100 text-blue-600" />
+          <div className="h-12 w-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center flex-shrink-0">
+            <User className="h-6 w-6" />
+          </div>
           <div>
-            <h2 className="text-xl font-bold">{esPaciente ? `${perfil.nombres} ${perfil.apellidos}` : perfil.email}</h2>
+            <h2 className="text-xl font-bold">
+              {esPaciente
+                ? `${perfil.nombres ?? ''} ${perfil.apellidos ?? ''}`.trim() || perfil.email
+                : perfil.profesional || perfil.email}
+            </h2>
             <p className="text-sm text-gray-600">{ROLES[perfil.rol] ?? perfil.rol}</p>
           </div>
         </div>
@@ -297,6 +362,95 @@ export default function Perfil() {
                 <button onClick={() => setDandoBaja(false)}
                   className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg">Cancelar</button>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {esPaciente && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-3">
+          <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider flex items-center gap-2">
+            <KeyRound className="h-4 w-4" /> Autenticación en dos pasos
+          </h3>
+          {mfaError ? (
+            <p className="text-sm text-red-600">No se pudo cargar la configuración. Recargue la página.</p>
+          ) : mfaActivo === null ? (
+            <p className="text-sm text-gray-500">Cargando configuración...</p>
+          ) : !mfaActivo ? (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-600">
+                Agrega una segunda capa de seguridad a tu cuenta. Al iniciar sesión se te pedirá un código de 6 dígitos
+                de tu app autenticadora (Google Authenticator, Authy, etc.).
+              </p>
+              {mfaConfigurando ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-center">
+                    {mfaQr ? (
+                      <img src={mfaQr} alt="Código QR para escanear" className="border border-gray-200 rounded p-2 bg-white" />
+                    ) : (
+                      <div className="h-48 w-48 flex items-center justify-center border border-gray-200 rounded p-2 bg-gray-50 text-xs text-gray-400">
+                        Generando QR…
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-gray-50 p-3 rounded-lg text-sm text-center border border-gray-100">
+                    <p className="text-xs text-gray-500 mb-1">Código secreto:</p>
+                    <code className="block text-gray-900 font-mono break-all">{mfaSecreto}</code>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Escanea el QR o escribe el código secreto en tu app autenticadora.
+                    </p>
+                  </div>
+                  <form onSubmit={verificarMFA} className="space-y-2">
+                    <input
+                      required
+                      maxLength={6}
+                      placeholder="Código de 6 dígitos"
+                      value={codigoMFA}
+                      onChange={(e) => setCodigoMFA(e.target.value)}
+                      className={inputClase}
+                    />
+                    <button type="submit" disabled={codigoMFA.length !== 6}
+                      className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-sm rounded-lg">
+                      Activar autenticación
+                    </button>
+                  </form>
+                </div>
+              ) : (
+                <button onClick={activarMFA} className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg">
+                  Activar autenticación en dos pasos
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg border border-green-100">
+                <CheckCircle className="h-5 w-5 text-green-600" />
+                <div className="flex-1">
+                  <p className="text-gray-900 text-sm">Autenticación en dos pasos activada</p>
+                  <p className="text-xs text-gray-600">Al iniciar sesión se te pedirá el código de tu app autenticadora.</p>
+                </div>
+                {!mfaDesactivando && (
+                  <button onClick={() => setMfaDesactivando(true)} className="text-sm text-red-600 hover:underline px-3 py-1">
+                    Desactivar
+                  </button>
+                )}
+              </div>
+              {mfaDesactivando && (
+                <form onSubmit={desactivarMFA} className="space-y-2">
+                  <input required maxLength={6} inputMode="numeric" placeholder="Código de 6 dígitos de tu app"
+                    value={codigoMFA} onChange={(e) => setCodigoMFA(e.target.value)} className={inputClase} />
+                  <div className="flex gap-2">
+                    <button type="submit" disabled={codigoMFA.length !== 6}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-300 text-white text-sm rounded-lg">
+                      Confirmar desactivación
+                    </button>
+                    <button type="button" onClick={() => { setMfaDesactivando(false); setCodigoMFA(''); }}
+                      className="px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm rounded-lg">
+                      Cancelar
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
           )}
         </div>

@@ -82,7 +82,7 @@ export default function App() {
           <Route path="/verificar-correo" element={usuario ? <Navigate to={inicioDe(usuario)} replace /> : <pages.VerificarCorreo />} />
 
           <Route element={<Layout />}>
-            <Route index element={<Navigate to={inicioDe(usuario)} replace />} />
+            <Route index element={usuario ? <Navigate to={inicioDe(usuario)} replace /> : <Navigate to="/login" replace />} />
             {/* Públicas: buscar especialistas y ver horarios sin cuenta (S01) */}
             <Route path="catalogo" element={<pages.Catalogo />} />
             <Route path="reserva/:profesionalId" element={<pages.Reserva />} />

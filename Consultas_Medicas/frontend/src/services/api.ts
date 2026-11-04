@@ -12,6 +12,8 @@ export interface UsuarioSesion {
   id: string;
   email: string;
   rol: string;
+  nombres?: string;
+  apellidos?: string;
 }
 
 // ---------- Sesión (S10) ----------
@@ -94,6 +96,11 @@ export const authService = {
   baja: (codigo: string) => api.post('/auth/baja', { codigo }),
   consentimientos: () => api.get('/auth/consentimientos'),
   actualizarConsentimiento: (aceptado: boolean) => api.post('/auth/consentimientos', { tipo: 'publicidad', aceptado }),
+  // Autenticación en dos pasos opcional (paciente)
+  mfaEstado: () => api.get('/auth/mfa/estado'),
+  mfaActivar: () => api.post('/auth/mfa/activar'),
+  mfaVerificar: (codigo: string) => api.post('/auth/mfa/verificar-codigo', { codigo }),
+  mfaDesactivar: (codigo: string) => api.post('/auth/mfa/desactivar', { codigo }),
 };
 
 export const agendaService = {
@@ -151,6 +158,7 @@ export const adminService = {
   profesionales: () => api.get('/admin/profesionales'),
   crearProfesional: (data: Record<string, string>) => api.post('/admin/profesionales', data),
   editarProfesional: (id: string, data: Record<string, unknown>) => api.patch(`/admin/profesionales/${id}`, data),
+  borrarProfesional: (id: string) => api.delete(`/admin/profesionales/${id}`),
 };
 
 export const auditoriaService = {

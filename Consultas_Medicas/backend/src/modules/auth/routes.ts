@@ -101,6 +101,29 @@ const mfaSchema = z.object({
   codigo: z.string().regex(/^\d{6}$/, 'El código tiene 6 dígitos'),
 });
 
+const codigoMfaSchema = z.object({
+  codigo: z.string().regex(/^\d{6}$/, 'El código tiene 6 dígitos'),
+});
+
+// Valida un código TOTP del usuario autenticado (secreto cifrado en BD, sin reutilizar el mismo paso de 30 s)
+async function validarCodigoMfa(usuarioId: string, codigo: unknown, ip?: string) {
+  const parsed = codigoMfaSchema.safeParse({ codigo });
+  if (!parsed.success) throw new HttpError(400, 'El código tiene 6 dígitos');
+
+  const secreto = (await pool.query(
+    `SELECT pgp_sym_decrypt(decode(segundo_factor_secreto, 'base64'), $2) AS secreto
+     FROM usuarios WHERE id = $1 AND segundo_factor_secreto IS NOT NULL`,
+    [usuarioId, SECRETOS.mfa]
+  )).rows[0]?.secreto;
+  if (!secreto) throw new HttpError(400, 'Primero inicie la activación');
+
+  const paso = verificarCodigo(secreto, parsed.data.codigo);
+  if (paso === null || !(await registrarPasoTotp(usuarioId, paso))) {
+    await auditar(pool, usuarioId, 'MFA', 'usuario', usuarioId, ip, {}, 'fallo');
+    throw new HttpError(400, 'Código incorrecto o ya utilizado');
+  }
+}
+
 // ---------- Códigos de un solo uso por correo (S02 y acciones sensibles, S10) ----------
 
 const codigoSchema = z.string().regex(/^\d{6}$/, 'El código tiene 6 dígitos');
@@ -182,6 +205,21 @@ const SELECT_USUARIO = `
          u.sede_id, u.profesional_id, u.aseguradora, r.nombre AS rol
   FROM usuarios u JOIN roles r ON r.id = u.rol_id`;
 
+// Nombres para mostrar en el encabezado. Solo pacientes y profesionales tienen nombre; el resto de roles usa el correo.
+// Se consulta con los claims del usuario porque la RLS limita cada tabla a su propio registro.
+async function obtenerNombres(payload: TokenPayload): Promise<{ nombres?: string; apellidos?: string }> {
+  const origen = payload.paciente_id
+    ? { tabla: 'pacientes', id: payload.paciente_id }
+    : payload.profesional_id
+      ? { tabla: 'profesionales', id: payload.profesional_id }
+      : null;
+  if (!origen) return {};
+
+  const fila = await conClaims(claimsDe(payload), async (db) =>
+    (await db.query(`SELECT nombres, apellidos FROM ${origen.tabla} WHERE id = $1`, [origen.id])).rows[0]);
+  return { nombres: fila?.nombres, apellidos: fila?.apellidos };
+}
+
 async function emitirSesion(req: Request, res: Response, u: UsuarioSesion, metodo: string) {
   const pacienteId = u.rol === 'paciente'
     ? (await pool.query('SELECT paciente_de_usuario($1) AS id', [u.id])).rows[0]?.id ?? undefined
@@ -198,6 +236,8 @@ async function emitirSesion(req: Request, res: Response, u: UsuarioSesion, metod
     aseguradora: u.aseguradora ?? undefined,
   };
 
+  const { nombres, apellidos } = await obtenerNombres(payload);
+
   const familia = crypto.randomUUID();
   const refresh = generateRefreshToken(payload, familia);
   await guardarRefreshVigente(familia, refresh.jti, REFRESH_TTL_SEGUNDOS);
@@ -210,7 +250,7 @@ async function emitirSesion(req: Request, res: Response, u: UsuarioSesion, metod
   res.json({
     accessToken: generateAccessToken(payload),
     expiresIn: 900, // 15 min
-    usuario: { id: u.id, email: u.email, rol: u.rol },
+    usuario: { id: u.id, email: u.email, rol: u.rol, nombres, apellidos },
   });
 }
 
@@ -327,7 +367,7 @@ router.post('/login', authLimiter, ah(async (req, res) => {
   }
 
   // Segundo factor obligatorio para el personal (S12, R15): TOTP con app autenticadora
-  if (u.rol !== 'paciente') {
+  if (u.rol !== 'paciente' || u.segundo_factor_habilitado) {
     const mfa_token = generateMfaToken(u.id);
     if (u.segundo_factor_habilitado) {
       return res.json({ mfa: 'verificar', mfa_token });
@@ -388,6 +428,58 @@ router.post('/mfa', authLimiter, ah(async (req, res) => {
     await auditar(pool, u.id, 'MFA_ENROLADO', 'usuario', u.id, req.ip);
   }
   await emitirSesion(req, res, u, 'contrasena+totp');
+}));
+
+// GET /auth/mfa/estado: indica si el paciente tiene el segundo factor activado
+router.get('/mfa/estado', authenticate, authorize('paciente'), ah(async (req, res) => {
+  const user = (req as AuthRequest).user!;
+  const u = (await pool.query(
+    'SELECT segundo_factor_habilitado AS activo FROM usuarios WHERE id = $1',
+    [user.sub]
+  )).rows[0];
+  res.json({ activo: !!u?.activo });
+}));
+
+// POST /auth/mfa/activar: genera el secreto TOTP y lo guarda cifrado (sin activar todavía)
+router.post('/mfa/activar', authenticate, authorize('paciente'), ah(async (req, res) => {
+  const user = (req as AuthRequest).user!;
+  const secreto = generarSecreto();
+  const otpauth = urlOtpauth(secreto, user.email);
+  await pool.query(
+    `UPDATE usuarios
+     SET segundo_factor_secreto = encode(pgp_sym_encrypt($1, $2), 'base64'),
+         actualizado_en = now()
+     WHERE id = $3`,
+    [secreto, SECRETOS.mfa, user.sub]
+  );
+  await auditar(pool, user.sub, 'MFA_ACTIVAR', 'usuario', user.sub, req.ip);
+  res.json({ secreto, otpauth, cuenta: user.email });
+}));
+
+// POST /auth/mfa/desactivar: exige un código vigente de la app
+router.post('/mfa/desactivar', authenticate, authorize('paciente'), authLimiter, ah(async (req, res) => {
+  const user = (req as AuthRequest).user!;
+  await validarCodigoMfa(user.sub, req.body?.codigo, req.ip);
+
+  await pool.query(
+    `UPDATE usuarios SET segundo_factor_habilitado = false, segundo_factor_secreto = NULL, actualizado_en = now()
+     WHERE id = $1`,
+    [user.sub]
+  );
+  await auditar(pool, user.sub, 'MFA_DESACTIVADO', 'usuario', user.sub, req.ip);
+  res.json({ mensaje: 'Autenticación en dos pasos desactivada' });
+}));
+
+// POST /auth/mfa/verificar-codigo: confirma con un código de la app y activa el factor
+router.post('/mfa/verificar-codigo', authenticate, authorize('paciente'), authLimiter, ah(async (req, res) => {
+  const user = (req as AuthRequest).user!;
+  await validarCodigoMfa(user.sub, req.body?.codigo, req.ip);
+
+  await pool.query(
+    'UPDATE usuarios SET segundo_factor_habilitado = true, actualizado_en = now() WHERE id = $1', [user.sub]
+  );
+  await auditar(pool, user.sub, 'MFA_ENROLADO', 'usuario', user.sub, req.ip);
+  res.json({ mensaje: 'Autenticación en dos pasos activada' });
 }));
 
 // POST /auth/verificar-correo: confirma el correo y el teléfono con los códigos enviados (S02).
@@ -484,12 +576,15 @@ router.post('/refresh', refreshLimiter, ah(async (req, res) => {
   await guardarRefreshVigente(payload.fam, nuevo.jti, REFRESH_TTL_SEGUNDOS);
   fijarCookieRefresh(res, nuevo.token);
 
+  const { nombres, apellidos } = await obtenerNombres(payload);
+
   res.json({
     accessToken: generateAccessToken(payload),
     expiresIn: 900,
-    usuario: { id: payload.sub, email: payload.email, rol: payload.rol },
+    usuario: { id: payload.sub, email: payload.email, rol: payload.rol, nombres, apellidos },
   });
 }));
+
 
 // POST /auth/logout: revoca el access token y toda la familia del refresh
 router.post('/logout', ah(async (req, res) => {

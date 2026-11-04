@@ -92,16 +92,18 @@ export default function Login() {
   ) : null;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="w-full max-w-md space-y-8 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 relative overflow-hidden">
+      {/* Fondo decorativo sutil */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full bg-[url('https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&q=80&w=1920')] bg-cover bg-center opacity-15 pointer-events-none" />
+      <div className="relative z-10 w-full max-w-md space-y-8 p-4">
         <div className="flex flex-col items-center">
-          <Shield className="h-12 w-12 text-blue-600 mb-2" />
-          <h2 className="text-2xl font-bold">{mfa ? 'Verificación en dos pasos' : 'Iniciar sesión'}</h2>
-          <p className="text-gray-600">Portal de Citas Médicas - Red de Consultorios</p>
+          <Shield className="h-12 w-12 text-blue-600 mb-2 drop-shadow-lg" />
+          <h2 className="text-2xl font-bold text-slate-800">{mfa ? 'Verificación en dos pasos' : 'Iniciar sesión'}</h2>
+          <p className="text-slate-600">Portal de Citas Médicas - Red de Consultorios</p>
         </div>
 
         {!mfa ? (
-          <form onSubmit={enviarCredenciales} className="space-y-6 bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+          <form onSubmit={enviarCredenciales} className="space-y-6 bg-white/90 backdrop-blur-md p-8 rounded-2xl shadow-xl border border-white/70 relative overflow-hidden">
             <div className="space-y-2">
               <div className="flex items-center gap-3 pl-3">
                 <Mail className="h-5 w-5 text-gray-400" />
@@ -132,7 +134,7 @@ export default function Login() {
             </button>
           </form>
         ) : (
-          <form onSubmit={enviarCodigo} className="space-y-6 bg-white p-8 rounded-xl shadow-sm border border-gray-200">
+          <form onSubmit={enviarCodigo} className="space-y-6 bg-white/90 backdrop-blur-md p-8 rounded-2xl shadow-xl border border-white/70 relative overflow-hidden">
             {mfa.tipo === 'enrolar' ? (
               <div className="space-y-3 text-sm text-gray-700">
                 <p className="flex items-start gap-2">

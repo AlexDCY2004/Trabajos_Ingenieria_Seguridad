@@ -29,9 +29,9 @@ GRANT USAGE ON SCHEMA public TO portal_app;
 
 -- Catálogo: lectura pública; el administrador de catálogo crea y edita (sin DELETE: se desactiva)
 GRANT SELECT ON roles TO portal_app;
-GRANT SELECT, INSERT, UPDATE ON sedes, profesionales TO portal_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON sedes, profesionales TO portal_app;
 -- Identidad: el login y el registro leen y crean usuarios
-GRANT SELECT, INSERT, UPDATE ON usuarios TO portal_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON usuarios TO portal_app;
 -- Datos de negocio: protegidos por RLS. Sin DELETE: las citas se cancelan, no se borran.
 GRANT SELECT, INSERT, UPDATE ON pacientes, dependientes, citas, pagos, consentimientos TO portal_app;
 -- Bitácora: solo lectura (filtrada por RLS); se escribe únicamente con registrar_auditoria()
