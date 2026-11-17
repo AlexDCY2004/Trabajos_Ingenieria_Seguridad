@@ -162,4 +162,51 @@ PASSWORD_PRUEBA='Prueba#2026' node pruebas/flujos-seguridad.js
 
 # Prueba de carga
 k6 run pruebas/carga.k6.js
+
+# Índice de contenidos: Ejercicio práctico 5
+## Aplicación para solicitar consultas médicas utilizando seguros
+
+## Introducción
+- Escenario y solicitud del cliente
+- Alcance y supuestos generales
+
+## 1. Depuración de requisitos
+- 1.1 Tabla de análisis de S01 a S14 (conservar, modificar o eliminar)
+- 1.2 Justificación de cada decisión
+- 1.3 Requisito definitivo
+- 1.4 Preguntas al cliente y supuestos declarados
+
+## 2. Análisis de datos
+- 2.1 Inventario de datos solicitados (finalidad, clasificación, necesidad)
+- 2.2 Personas que podrían acceder
+- 2.3 Plazo de conservación propuesto
+- 2.4 Marco normativo ecuatoriano vigente y disposiciones citadas
+
+## 3. Diseño propuesto
+- 3.1 Roles y permisos (pacientes, profesionales, consultorios, aseguradoras, proveedores)
+- 3.2 Componentes principales
+- 3.3 Integraciones
+- 3.4 Recorrido de los datos
+- 3.5 Dimensionamiento (usuarios simultáneos, operaciones, almacenamiento, disponibilidad)
+- 3.6 Mediciones necesarias para validar el dimensionamiento
+
+## 4. Matriz de riesgos
+- 4.1 Escala de valoración y procedimiento para determinar el nivel de riesgo
+- 4.2 Matriz de riesgos (ID y requisito relacionado, activo o dato, amenaza, vulnerabilidad, escenario y consecuencia, propiedad afectada C/I/D, probabilidad, impacto, nivel y prioridad, controles propuestos, verificación del control, riesgo residual)
+- 4.3 Justificación del riesgo residual
+
+## 5. Relación con MITRE ATT&CK
+- 5.1 Escenarios de ataque identificados
+- 5.2 Técnicas y subtécnicas (identificador, nombre, táctica, relación con el escenario)
+- 5.3 Controles para prevenir, detectar y responder (diferenciados de las técnicas del adversario)
+
+## 6. Evidencias y fuentes
+- 6.1 Plan de verificación: pruebas y resultados esperados por control
+- 6.2 Fuentes oficiales de normativa ecuatoriana (con fecha de consulta)
+- 6.3 Documentación técnica primaria (con fecha de consulta)
+
+## 7. Cierre dirigido al cliente
+- Principales cambios y sus razones
+
+## Referencias
 ```

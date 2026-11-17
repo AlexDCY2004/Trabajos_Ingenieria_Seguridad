@@ -10,7 +10,6 @@ export const globalLimiter = rateLimit({
   message: { error: 'Demasiadas peticiones, intente de nuevo más tarde' },
 });
 
-// Login, segundo factor y registro por IP. Cada cuenta además se bloquea tras 5 fallos (Redis).
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 30,

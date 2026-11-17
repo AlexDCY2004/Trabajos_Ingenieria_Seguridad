@@ -1,8 +1,5 @@
 import { enviarCorreo } from './correo';
 
-// Proveedor de SMS (encargado del tratamiento, sección 3.2). En producción se llama a su API con la
-// clave del gestor de secretos y contrato de encargo (arts. 34 y 35). En desarrollo no hay proveedor:
-// el SMS se entrega en Mailpit como un correo dirigido a <teléfono>@sms.local, para poder leerlo.
 const SMS_API_URL = process.env.SMS_API_URL;
 const SMS_API_KEY = process.env.SMS_API_KEY;
 

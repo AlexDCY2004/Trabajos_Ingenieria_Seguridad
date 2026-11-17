@@ -1,8 +1,5 @@
 import nodemailer from 'nodemailer';
 
-// Proveedor de correo (encargado del tratamiento, sección 3.2). En desarrollo es Mailpit, un buzón local
-// que captura todo lo enviado (http://localhost:8025). En producción se configura el SMTP del proveedor
-// con TLS y credenciales del gestor de secretos.
 const transporte = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'localhost',
   port: Number(process.env.SMTP_PORT || 1025),

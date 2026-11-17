@@ -6,9 +6,6 @@ import { authenticate, AuthRequest } from '../../middlewares/auth';
 import { authorize } from '../../middlewares/rbac';
 import { ah, HttpError, exigirUuid } from '../../utils/http';
 
-// Soporte técnico / DevOps (sección 3.1): opera la plataforma sin acceso a datos de pacientes.
-// Para un caso excepcional pide acceso de emergencia (break-glass): lo aprueba otra persona (el oficial
-// de seguridad), dura 60 minutos, es de solo lectura sobre una sede y cada lectura queda en la bitácora.
 
 const router = Router();
 router.use(authenticate, authorize('soporte'));

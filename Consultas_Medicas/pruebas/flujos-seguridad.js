@@ -1,15 +1,4 @@
-// Pruebas de punta a punta de los controles del informe contra la API en ejecución (Node 20, sin dependencias).
-// Uso:  PASSWORD_PRUEBA='Prueba#2026' node pruebas/flujos-seguridad.js   (API_URL=http://localhost:4000 por defecto)
-//
-// Requisitos: contenedores levantados, `npm run seed` aplicado y el personal sin segundo factor enrolado
-// (la prueba enrola el TOTP de cada cuenta). Para repetirla, restablezca el segundo factor del personal:
-//   UPDATE usuarios u SET segundo_factor_habilitado = false, segundo_factor_secreto = NULL
-//   FROM roles r WHERE r.id = u.rol_id AND r.nombre <> 'paciente';
-// El límite de autenticación por IP (30 cada 15 min) se reinicia con `docker restart citas_backend`.
-//
-// Cubre: Figura 11 (autorización previa, sin cobertura, pago particular, desistir), UC12, UC14, UC17, UC18,
-// UC09, UC21, S02 (teléfono), V03 (cross-tenant por API), V17 (contraseñas filtradas y CAPTCHA),
-// break-glass del soporte y conciliación por medio de pago.
+
 const crypto = require('crypto');
 const API = process.env.API_URL || 'http://localhost:4000';
 // Misma contraseña con la que el seed creó las cuentas (PASSWORD_PRUEBA de docker-compose.yml)

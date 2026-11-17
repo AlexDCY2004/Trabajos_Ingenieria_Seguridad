@@ -225,7 +225,6 @@ async function emitirSesion(req: Request, res: Response, u: UsuarioSesion, metod
     ? (await pool.query('SELECT paciente_de_usuario($1) AS id', [u.id])).rows[0]?.id ?? undefined
     : undefined;
 
-  // Los claims viajan en el token y el backend los fija en cada transacción para RLS
   const payload: TokenPayload = {
     sub: u.id,
     email: u.email,
@@ -317,7 +316,6 @@ router.post('/registro', authLimiter, ah(async (req, res) => {
     throw err;
   }
 
-  // S02: correo y teléfono se verifican con un código de un solo uso antes del primer inicio de sesión
   await enviarCodigoVerificacion(usuarioId, d.email);
   await enviarCodigoTelefono(usuarioId, d.telefono);
   res.status(201).json({

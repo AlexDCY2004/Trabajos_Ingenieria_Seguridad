@@ -5,17 +5,11 @@ import { authenticate, AuthRequest } from '../../middlewares/auth';
 import { authorize } from '../../middlewares/rbac';
 import { ah, HttpError, exigirUuid } from '../../utils/http';
 
-// Oficial de seguridad y DPD (sección 3.1): incidentes (UC21, LOPDP art. 43), alertas de detección
-// (sección 5, V21), revisión trimestral de accesos (S12, R05) y aprobación del acceso de emergencia.
 
 const router = Router();
 
-// Plazo para notificar a la autoridad una vulneración con datos personales (LOPDP art. 43).
-// La Ley de Fortalecimiento de la Ciberseguridad (2026) reformó ese artículo: confirmar el texto vigente.
 const DIAS_NOTIFICACION_AUTORIDAD = 5;
-// Desactivación por inactividad del personal (R05). La aplica el programador diario.
 export const DIAS_INACTIVIDAD_PERSONAL = 90;
-// Duración de un acceso de emergencia aprobado (break-glass)
 const MINUTOS_ACCESO_EMERGENCIA = 60;
 
 // ============ Incidentes (UC21) ============

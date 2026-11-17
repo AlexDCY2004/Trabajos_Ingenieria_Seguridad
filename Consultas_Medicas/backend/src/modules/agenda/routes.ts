@@ -31,10 +31,7 @@ const PROFESIONAL_ACTIVO = `
   FROM profesionales pr JOIN sedes s ON s.id = pr.sede_id
   WHERE pr.id = $1 AND pr.activo = true AND s.activo = true`;
 
-// ============ Catálogo público (S01: buscar sin cuenta; no se envían datos personales) ============
 
-// GET /agenda/sedes: sedes activas con su ubicación pública. "Cerca de mí" ordena por distancia en el
-// dispositivo: la ubicación del usuario nunca se envía al servidor ni se guarda (S05).
 router.get('/sedes', ah(async (_req, res) => {
   res.json((await pool.query(
     'SELECT id, nombre, direccion, latitud, longitud FROM sedes WHERE activo = true ORDER BY nombre')).rows);

@@ -1,13 +1,3 @@
-// Verificaciones automáticas del plan de la sección 6.1 que se comprueban contra la base de datos.
-// Uso (con los contenedores levantados):  docker exec citas_backend npm run verificar
-// Termina con código 1 si alguna falla, para usarlo como compuerta en el pipeline (Figura 12).
-//
-//   V01  Sin datos de tarjeta almacenados (patrón de tarjeta con Luhn en todas las columnas de texto)
-//   V03  Aislamiento entre aseguradoras con RLS (SQL directo con el rol de la API y el claim de otra aseguradora)
-//   V04  Autorización por objeto: un paciente no ve citas ajenas; identificadores UUID no secuenciales
-//   V07  Integridad de la bitácora: UPDATE, DELETE y TRUNCATE denegados; cadena de hash válida
-//   V15  Identificación y póliza ilegibles en un volcado (solo HMAC y texto cifrado)
-//   V16  Minimización: el esquema no tiene columnas clínicas, de religión, ingresos, empleador ni ubicación
 
 import { Pool, PoolClient } from 'pg';
 

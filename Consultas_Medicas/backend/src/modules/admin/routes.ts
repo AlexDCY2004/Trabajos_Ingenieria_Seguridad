@@ -16,16 +16,11 @@ function emailDe(nombres: string, apellidos: string): string {
   return `${normaliza(nombres)}.${normaliza(apellidos)}@citas.com`;
 }
 
-// Administrador de catálogo (sección 3.1, UC19): gestiona sedes y profesionales. No ve pacientes,
-// citas ni pagos: para desactivar solo consulta cuántas citas futuras quedan (funciones de la base).
-// Los horarios siguen la regla común de la agenda (agenda/horarios.ts).
-
 const router = Router();
 router.use(authenticate, authorize('admin'));
 
 const texto = (min: number, max: number) => z.string().trim().min(min).max(max);
 
-// Coordenadas públicas de la sede para "cerca de mí" (S05); el cálculo de distancia se hace en el dispositivo
 const sedeSchema = z.object({
   nombre: texto(3, 100),
   direccion: texto(5, 200),
